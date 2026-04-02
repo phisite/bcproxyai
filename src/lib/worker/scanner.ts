@@ -336,20 +336,25 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     logWorker("scan", `DB upsert error: ${err}`, "error");
   }
 
-  // ให้ DeepSeek ตั้งชื่อเล่นให้โมเดลใหม่ (max 5 ต่อรอบ ประหยัด token)
-  if (DEEPSEEK_API_KEY && newModels.length > 0) {
-    const updateNickname = db.prepare("UPDATE models SET nickname = ? WHERE id = ?");
-    // ดึงชื่อที่มีอยู่แล้วเพื่อไม่ให้ซ้ำ
-    const existingNicknames = (db.prepare("SELECT nickname FROM models WHERE nickname IS NOT NULL").all() as { nickname: string }[]).map(r => r.nickname);
-    const toName = newModels.slice(0, 5);
-    for (const m of toName) {
-      const nickname = await generateNickname(m.name, m.provider, existingNicknames);
-      if (nickname && !existingNicknames.includes(nickname)) {
-        try {
-          updateNickname.run(nickname, m.id);
-          existingNicknames.push(nickname);
-          logWorker("scan", `🎭 ตั้งชื่อ: ${m.name} → "${nickname}"`, "success");
-        } catch { /* silent */ }
+  // ให้ DeepSeek ตั้งชื่อเล่นให้โมเดลที่ยังไม่มี nickname (max 10 ต่อรอบ ประหยัด token)
+  if (DEEPSEEK_API_KEY) {
+    const unnamed = db.prepare(
+      "SELECT id, name, provider FROM models WHERE nickname IS NULL AND context_length >= 32000 LIMIT 10"
+    ).all() as { id: string; name: string; provider: string }[];
+
+    if (unnamed.length > 0) {
+      const updateNickname = db.prepare("UPDATE models SET nickname = ? WHERE id = ?");
+      const existingNicknames = (db.prepare("SELECT nickname FROM models WHERE nickname IS NOT NULL").all() as { nickname: string }[]).map(r => r.nickname);
+
+      for (const m of unnamed) {
+        const nickname = await generateNickname(m.name, m.provider, existingNicknames);
+        if (nickname && !existingNicknames.includes(nickname)) {
+          try {
+            updateNickname.run(nickname, m.id);
+            existingNicknames.push(nickname);
+            logWorker("scan", `🎭 ตั้งชื่อ: ${m.name} → "${nickname}"`, "success");
+          } catch { /* silent */ }
+        }
       }
     }
   }
