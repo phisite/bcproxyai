@@ -252,10 +252,10 @@ async function fetchMistralModels(): Promise<ModelRow[]> {
 
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY ?? "";
 
-async function generateNickname(modelName: string, provider: string, existingNames: string[]): Promise<string | null> {
+export async function generateNickname(modelName: string, provider: string, existingNames: string[], scoreInfo = ""): Promise<string | null> {
   if (!DEEPSEEK_API_KEY) return null;
   try {
-    const avoid = existingNames.length > 0 ? `\nห้ามใช้ชื่อเหล่านี้: ${existingNames.join(", ")}` : "";
+    const avoid = existingNames.length > 0 ? `\nห้ามใช้ชื่อเหล่านี้: ${existingNames.slice(-30).join(", ")}` : "";
     const res = await fetch("https://api.deepseek.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -266,7 +266,7 @@ async function generateNickname(modelName: string, provider: string, existingNam
         model: "deepseek-chat",
         messages: [{
           role: "user",
-          content: `ตั้งชื่อเล่นภาษาไทยตลกๆ น่ารัก ให้ AI model ชื่อ "${modelName}" จาก ${provider} ตอบแค่ชื่อเดียว สั้นๆ 2-4 คำ ห้ามใส่เครื่องหมายคำพูด ห้ามอธิบาย${avoid}`,
+          content: `ตั้งชื่อเล่นภาษาไทยตลกๆ น่ารัก ให้ AI model ชื่อ "${modelName}" จาก ${provider}${scoreInfo} ตอบแค่ชื่อเดียว สั้นๆ 2-4 คำ ห้ามใส่เครื่องหมายคำพูด ห้ามอธิบาย${avoid}`,
         }],
         max_tokens: 30,
       }),

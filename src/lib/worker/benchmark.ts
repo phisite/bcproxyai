@@ -323,21 +323,37 @@ export async function runBenchmarks(): Promise<{
       }
     }
 
-    // สรุปผลรายโมเดล
+    // สรุปผลรายโมเดล + ตั้งชื่อใหม่ตามคะแนน
     if (modelQuestionCount > 0) {
       const avgScore = modelTotalScore / modelQuestionCount;
-      if (avgScore >= 5) {
-        logWorker(
-          "benchmark",
-          `✅ สอบผ่าน: ${model.model_id} — คะแนน ${avgScore.toFixed(1)}/10`,
-          "success"
-        );
-      } else {
-        logWorker(
-          "benchmark",
-          `❌ สอบตก: ${model.model_id} — คะแนน ${avgScore.toFixed(1)}/10`,
-          "warn"
-        );
+      const pct = Math.round((avgScore / 10) * 100);
+      const passed = avgScore >= 5;
+
+      logWorker(
+        "benchmark",
+        `${passed ? "✅ สอบผ่าน" : "❌ สอบตก"}: ${model.model_id} — คะแนน ${avgScore.toFixed(1)}/10 (${pct}%)`,
+        passed ? "success" : "warn"
+      );
+
+      // ตั้งชื่อเล่นใหม่ตามคะแนน + ความประพฤติ
+      if (DEEPSEEK_API_KEY) {
+        try {
+          const { generateNickname } = await import("./scanner");
+          const existingNicknames = (db.prepare("SELECT nickname FROM models WHERE nickname IS NOT NULL AND id != ?").all(model.id) as { nickname: string }[]).map(r => r.nickname);
+
+          let behavior = "";
+          if (pct >= 90) behavior = ` คะแนนสูงมาก ${pct}% เด่นมาก ขยัน เก่ง`;
+          else if (pct >= 70) behavior = ` คะแนนดี ${pct}% ตั้งใจเรียน`;
+          else if (pct >= 50) behavior = ` คะแนนพอผ่าน ${pct}% ขี้เกียจนิดหน่อย`;
+          else if (pct >= 30) behavior = ` คะแนนต่ำ ${pct}% ชอบหลับในห้อง`;
+          else behavior = ` สอบตก ${pct}% ไม่ตั้งใจเรียนเลย`;
+
+          const nickname = await generateNickname(model.model_id, model.provider, existingNicknames, behavior);
+          if (nickname) {
+            db.prepare("UPDATE models SET nickname = ? WHERE id = ?").run(nickname, model.id);
+            logWorker("benchmark", `🎭 ตั้งชื่อ: ${model.model_id} → "${nickname}" (${pct}%)`, "success");
+          }
+        } catch { /* silent */ }
       }
     }
   }
