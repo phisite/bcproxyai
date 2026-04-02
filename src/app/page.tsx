@@ -260,24 +260,15 @@ export default function Dashboard() {
   const stats = statusData?.stats;
   const logs = statusData?.recentLogs ?? [];
 
-  // Deduplicate models by name — keep the best one (available > cooldown > unknown, highest score)
+  // Deduplicate by provider+model_id (same model same provider = duplicate, different provider = different student)
   const deduped = (() => {
-    const byName = new Map<string, ModelData>();
-    for (const m of models) {
-      const key = m.name;
-      const existing = byName.get(key);
-      if (!existing) { byName.set(key, m); continue; }
-      // prefer available > cooldown > unknown
-      const statusOrder = { available: 0, cooldown: 1, unknown: 2 } as Record<string, number>;
-      const existScore = existing.benchmark?.avgScore ?? -1;
-      const newScore = m.benchmark?.avgScore ?? -1;
-      const existStatus = statusOrder[existing.health.status] ?? 2;
-      const newStatus = statusOrder[m.health.status] ?? 2;
-      if (newStatus < existStatus || (newStatus === existStatus && newScore > existScore)) {
-        byName.set(key, m);
-      }
-    }
-    return Array.from(byName.values());
+    const seen = new Set<string>();
+    return models.filter((m) => {
+      const key = m.id; // id = "provider:model_id" — already unique per provider+model
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   })();
 
   const availableModels = deduped.filter((m) => m.health.status === "available");
