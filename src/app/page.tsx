@@ -22,6 +22,7 @@ import { StatsCards } from "../components/StatsCards";
 import { ModelGrid } from "../components/ModelGrid";
 import { ChatPanel } from "../components/ChatPanel";
 import { GuideModal } from "../components/GuideModal";
+import { SpeedRace } from "../components/SpeedRace";
 
 // ─── Gateway Config Card ───────────────────────────────────────────────────────
 
@@ -317,6 +318,7 @@ export default function Dashboard() {
             {[
               { id: "status",     label: "ภาพรวม" },
               { id: "rankings",   label: "อันดับ" },
+              { id: "speed-race", label: "แข่งความเร็ว" },
               { id: "all-models", label: "รายชื่อโมเดล" },
               { id: "chat",       label: "ทดลองแชท" },
               { id: "gateway-logs", label: "Gateway Log" },
@@ -599,6 +601,9 @@ export default function Dashboard() {
             </div>
           )}
         </section>
+
+        {/* ── Section 3.5: Speed Race ──────────────────────────────────────── */}
+        <SpeedRace models={deduped} loading={loading} />
 
         {/* ── Section 4: All Models Grid ───────────────────────────────────── */}
         <ModelGrid

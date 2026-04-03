@@ -1,14 +1,5 @@
 import { getDb } from "@/lib/db/schema";
-
-const API_KEYS: Record<string, string> = {
-  openrouter: process.env.OPENROUTER_API_KEY ?? "",
-  kilo: process.env.KILO_API_KEY ?? "",
-  google: process.env.GOOGLE_AI_API_KEY ?? "",
-  groq: process.env.GROQ_API_KEY ?? "",
-  cerebras: process.env.CEREBRAS_API_KEY ?? "",
-  sambanova: process.env.SAMBANOVA_API_KEY ?? "",
-  mistral: process.env.MISTRAL_API_KEY ?? "",
-};
+import { getNextApiKey } from "@/lib/api-keys";
 
 const PROVIDER_URLS: Record<string, string> = {
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
@@ -67,7 +58,7 @@ interface BenchmarkSummary {
 }
 
 function buildHeaders(provider: string): Record<string, string> {
-  const key = API_KEYS[provider];
+  const key = getNextApiKey(provider);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${key}`,

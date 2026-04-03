@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/schema";
+import { getNextApiKey, markKeyCooldown } from "@/lib/api-keys";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,23 +15,38 @@ const PROVIDER_URLS: Record<string, string> = {
   mistral: "https://api.mistral.ai/v1/chat/completions",
 };
 
-// Provider API keys from env
-function getApiKey(provider: string): string {
-  switch (provider) {
-    case "openrouter":
-      return process.env.OPENROUTER_API_KEY || "";
-    case "kilo":
-      return process.env.KILO_API_KEY || "";
-    case "groq":
-      return process.env.GROQ_API_KEY || "";
-    case "cerebras":
-      return process.env.CEREBRAS_API_KEY || "";
-    case "sambanova":
-      return process.env.SAMBANOVA_API_KEY || "";
-    case "mistral":
-      return process.env.MISTRAL_API_KEY || "";
-    default:
-      return "";
+// Budget check: returns { ok, percentUsed } — blocks at 95%
+function checkBudget(): { ok: boolean; preferCheap: boolean; percentUsed: number } {
+  try {
+    const db = getDb();
+    const configRow = db.prepare("SELECT value FROM budget_config WHERE key = 'daily_token_limit'").get() as { value: string } | undefined;
+    const dailyLimit = configRow ? Number(configRow.value) : 1000000;
+
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const usage = db.prepare(
+      "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS total FROM token_usage WHERE created_at >= ?"
+    ).get(`${today}T00:00:00`) as { total: number };
+
+    const percentUsed = dailyLimit > 0 ? (usage.total / dailyLimit) * 100 : 0;
+    return {
+      ok: percentUsed < 95,
+      preferCheap: percentUsed >= 80,
+      percentUsed,
+    };
+  } catch {
+    return { ok: true, preferCheap: false, percentUsed: 0 };
+  }
+}
+
+// Track token usage after a successful response
+function trackTokenUsage(provider: string, modelId: string, inputTokens: number, outputTokens: number) {
+  try {
+    const db = getDb();
+    db.prepare(
+      "INSERT INTO token_usage (provider, model_id, input_tokens, output_tokens, estimated_cost_usd) VALUES (?, ?, ?, ?, 0)"
+    ).run(provider, modelId, inputTokens, outputTokens);
+  } catch {
+    // non-critical
   }
 }
 
@@ -186,11 +202,24 @@ function extractUserMessage(body: Record<string, unknown>): string | null {
   return JSON.stringify(last.content).slice(0, 500);
 }
 
-function logCooldown(modelId: string, errorMsg: string, shortCooldown = false) {
+function logCooldown(modelId: string, errorMsg: string, httpStatus = 0) {
   try {
     const db = getDb();
-    // 413 = request too large → short cooldown (15 min), 429/5xx = rate limit → 2 hours
-    const cooldownMs = shortCooldown ? 15 * 60 * 1000 : 2 * 60 * 60 * 1000;
+    // Smart cooldown based on error type
+    let cooldownMs: number;
+    if (httpStatus === 413) {
+      cooldownMs = 15 * 60 * 1000;    // 15 นาที — request ใหญ่เกินไป (ลองใหม่ได้เร็ว)
+    } else if (httpStatus === 429) {
+      cooldownMs = 30 * 60 * 1000;    // 30 นาที — rate limit
+    } else if (httpStatus === 400) {
+      cooldownMs = 10 * 60 * 1000;    // 10 นาที — bad request (อาจเป็น rate limit แฝง)
+    } else if (httpStatus >= 500) {
+      cooldownMs = 60 * 60 * 1000;    // 1 ชม. — server error (provider มีปัญหา)
+    } else if (httpStatus === 401 || httpStatus === 403) {
+      cooldownMs = 24 * 60 * 60 * 1000; // 24 ชม. — auth error (key หมดอายุ/ผิด)
+    } else {
+      cooldownMs = 30 * 60 * 1000;    // 30 นาที — default
+    }
     const cooldownUntil = new Date(Date.now() + cooldownMs).toISOString();
     db.prepare(
       `INSERT INTO health_logs (model_id, status, error, cooldown_until, checked_at)
@@ -291,7 +320,7 @@ async function forwardToProvider(
   const url = PROVIDER_URLS[provider];
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
-  const apiKey = getApiKey(provider);
+  const apiKey = getNextApiKey(provider);
   if (!apiKey) throw new Error(`No API key for provider: ${provider}`);
 
   const headers: Record<string, string> = {
@@ -313,6 +342,11 @@ async function forwardToProvider(
     body: JSON.stringify(requestBody),
   });
 
+  // On 429, mark this key as rate-limited and cooldown 5 minutes
+  if (response.status === 429) {
+    markKeyCooldown(provider, apiKey, 300000);
+  }
+
   return response;
 }
 
@@ -327,7 +361,29 @@ export async function POST(req: NextRequest) {
     const isStream = body.stream === true;
     const caps = detectRequestCapabilities(body);
 
+    // Budget check — block at 95%
+    const budget = checkBudget();
+    if (!budget.ok) {
+      return NextResponse.json(
+        {
+          error: {
+            message: `Daily budget exceeded (${budget.percentUsed.toFixed(1)}% used). ลองใหม่พรุ่งนี้หรือเพิ่ม limit ผ่าน /api/budget`,
+            type: "rate_limit_error",
+            code: 429,
+          },
+        },
+        { status: 429 }
+      );
+    }
+
     const parsed = parseModelField(modelField);
+
+    // If budget >= 80%, prefer fast/cheap mode
+    if (budget.preferCheap && parsed.mode === "auto") {
+      parsed.mode = "fast" as typeof parsed.mode;
+    }
+
+    const estInputTokens = estimateTokens(body);
 
     // ---- Direct provider routing (openrouter/xxx, kilo/xxx, groq/xxx) ----
     if (parsed.mode === "direct") {
@@ -342,7 +398,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      return buildProxiedResponse(response, provider!, modelId!, isStream);
+      return buildProxiedResponse(response, provider!, modelId!, isStream, estInputTokens);
     }
 
     // ---- Match by model string ----
@@ -375,11 +431,11 @@ export async function POST(req: NextRequest) {
           { status: response.status }
         );
       }
-      return buildProxiedResponse(response, row.provider, row.model_id, isStream);
+      return buildProxiedResponse(response, row.provider, row.model_id, isStream, estInputTokens);
     }
 
     // ---- Smart routing: auto / fast / tools / thai ----
-    const tokensEst = estimateTokens(body);
+    const tokensEst = estInputTokens;
     const candidates = selectModelsByMode(parsed.mode, caps, tokensEst);
 
     if (candidates.length === 0) {
@@ -405,18 +461,26 @@ export async function POST(req: NextRequest) {
     const userMsg = extractUserMessage(body);
     const triedProviders = new Set<string>();
 
-    // Spread candidates across providers: pick 1 from each provider first, then fill
+    // Weighted Load Balancing: prefer providers with higher score + lower latency
     const spreadCandidates: typeof candidates = [];
     const byProvider: Record<string, typeof candidates> = {};
     for (const c of candidates) {
       (byProvider[c.provider] ??= []).push(c);
     }
-    // Round-robin: take 1 from each provider in rotation
+    // Sort providers by weight: score * 1000 - latency (higher = better)
+    const providerOrder = Object.entries(byProvider)
+      .map(([, models]) => {
+        const avgLat = models.reduce((s, m) => s + (m.avg_latency ?? 9999999), 0) / models.length;
+        const avgScore = models.reduce((s, m) => s + (m.avg_score ?? 0), 0) / models.length;
+        return { models, weight: avgScore * 1000 - avgLat };
+      })
+      .sort((a, b) => b.weight - a.weight);
+    // Round-robin across weighted providers
     let hasMore = true;
     let round = 0;
     while (hasMore && spreadCandidates.length < candidates.length) {
       hasMore = false;
-      for (const provModels of Object.values(byProvider)) {
+      for (const { models: provModels } of providerOrder) {
         if (round < provModels.length) {
           spreadCandidates.push(provModels[round]);
           hasMore = true;
@@ -436,30 +500,15 @@ export async function POST(req: NextRequest) {
         if (response.ok) {
           const latency = Date.now() - startTime;
           logGateway(modelField, actualModelId, provider, 200, latency, 0, 0, null, userMsg, null);
-          return buildProxiedResponse(response, provider, actualModelId, isStream);
+          return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens);
         }
 
-        // Retryable error (429, 413, 5xx, and 400 which some providers use for rate limit)
-        if (isRetryableStatus(response.status) || response.status === 400) {
-          const errText = await response.text();
-          lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
-
-          if (response.status === 413) {
-            logCooldown(dbModelId, `HTTP 413: ${errText}`, true);
-          } else if (response.status === 429 || response.status === 400) {
-            logCooldown(dbModelId, `HTTP ${response.status}: ${errText}`);
-          }
-          continue;
-        }
-
-        // Non-retryable error
-        const errBody = await response.text();
-        const latency = Date.now() - startTime;
-        logGateway(modelField, actualModelId, provider, response.status, latency, 0, 0, errBody.slice(0, 300), userMsg, null);
-        return NextResponse.json(
-          { error: { message: errBody, type: "provider_error", code: response.status } },
-          { status: response.status }
-        );
+        // Any non-200 → cooldown immediately + try next model
+        const errText = await response.text();
+        lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
+        // 413 = short cooldown (15 min), everything else = 2 hours
+        logCooldown(dbModelId, `HTTP ${response.status}: ${errText}`, response.status);
+        continue;
       } catch (err) {
         lastError = `${provider}/${actualModelId}: ${String(err)}`;
         logCooldown(dbModelId, lastError);
@@ -499,7 +548,8 @@ function buildProxiedResponse(
   upstream: Response,
   provider: string,
   modelId: string,
-  stream: boolean
+  stream: boolean,
+  estimatedInputTokens = 0
 ): Response {
   const headers = new Headers();
   headers.set("Content-Type", upstream.headers.get("Content-Type") || "application/json");
@@ -510,15 +560,63 @@ function buildProxiedResponse(
   headers.set("Access-Control-Allow-Origin", "*");
 
   if (stream && upstream.body) {
-    // Stream SSE chunks directly
-    return new Response(upstream.body, {
+    // Stream SSE — track estimated tokens from content length
+    const reader = upstream.body.getReader();
+    let totalBytes = 0;
+    const passthrough = new ReadableStream({
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        if (done) {
+          // Estimate output tokens from streamed bytes (~3 chars/token)
+          const estOutputTokens = Math.ceil(totalBytes / 3);
+          trackTokenUsage(provider, modelId, estimatedInputTokens, estOutputTokens);
+          controller.close();
+          return;
+        }
+        totalBytes += value.byteLength;
+        controller.enqueue(value);
+      },
+    });
+    return new Response(passthrough, {
       status: upstream.status,
       headers,
     });
   }
 
-  // Non-streaming: pass through body
-  return new Response(upstream.body, {
+  // Non-streaming: clone body, extract usage, then return
+  const [bodyForUser, bodyForTracking] = upstream.body
+    ? [upstream.body, upstream.clone().body]
+    : [null, null];
+
+  // Fire-and-forget: read clone to extract token usage
+  if (bodyForTracking) {
+    const trackingReader = bodyForTracking.getReader();
+    const chunks: Uint8Array[] = [];
+    (async () => {
+      try {
+        let done = false;
+        while (!done) {
+          const result = await trackingReader.read();
+          done = result.done;
+          if (result.value) chunks.push(result.value);
+        }
+        const text = new TextDecoder().decode(Buffer.concat(chunks));
+        const json = JSON.parse(text);
+        const usage = json.usage;
+        if (usage) {
+          trackTokenUsage(provider, modelId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
+        } else {
+          // Fallback: estimate from response size
+          const estOutput = Math.ceil(text.length / 3);
+          trackTokenUsage(provider, modelId, estimatedInputTokens, estOutput);
+        }
+      } catch {
+        // non-critical
+      }
+    })();
+  }
+
+  return new Response(bodyForUser, {
     status: upstream.status,
     headers,
   });

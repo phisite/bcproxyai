@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { getNextApiKey } from "@/lib/api-keys";
 
 export const dynamic = "force-dynamic";
 
@@ -10,16 +11,6 @@ const PROVIDER_URLS: Record<string, string> = {
   cerebras: "https://api.cerebras.ai/v1/chat/completions",
   sambanova: "https://api.sambanova.ai/v1/chat/completions",
   mistral: "https://api.mistral.ai/v1/chat/completions",
-};
-
-const PROVIDER_KEYS: Record<string, string> = {
-  openrouter: process.env.OPENROUTER_API_KEY ?? "",
-  kilo: process.env.KILO_API_KEY ?? "",
-  google: process.env.GOOGLE_AI_API_KEY ?? "",
-  groq: process.env.GROQ_API_KEY ?? "",
-  cerebras: process.env.CEREBRAS_API_KEY ?? "",
-  sambanova: process.env.SAMBANOVA_API_KEY ?? "",
-  mistral: process.env.MISTRAL_API_KEY ?? "",
 };
 
 export async function POST(req: NextRequest) {
@@ -36,7 +27,7 @@ export async function POST(req: NextRequest) {
     }
 
     const url = PROVIDER_URLS[provider];
-    const apiKey = PROVIDER_KEYS[provider];
+    const apiKey = getNextApiKey(provider);
     if (!url) {
       return new Response(JSON.stringify({ error: `Unknown provider: ${provider}` }), { status: 400 });
     }

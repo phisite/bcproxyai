@@ -1,12 +1,5 @@
 import { getDb } from "@/lib/db/schema";
-
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const KILO_API_KEY = process.env.KILO_API_KEY ?? "";
-const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY ?? "";
-const GROQ_API_KEY = process.env.GROQ_API_KEY ?? "";
-const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY ?? "";
-const SAMBANOVA_API_KEY = process.env.SAMBANOVA_API_KEY ?? "";
-const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY ?? "";
+import { getNextApiKey } from "@/lib/api-keys";
 
 interface ModelRow {
   id: string;
@@ -38,7 +31,7 @@ function logWorker(step: string, message: string, level = "info") {
 async function fetchOpenRouterModels(): Promise<ModelRow[]> {
   try {
     const res = await fetch("https://openrouter.ai/api/v1/models", {
-      headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}` },
+      headers: { Authorization: `Bearer ${getNextApiKey("openrouter")}` },
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -67,7 +60,8 @@ async function fetchOpenRouterModels(): Promise<ModelRow[]> {
 async function fetchKiloModels(): Promise<ModelRow[]> {
   try {
     const headers: Record<string, string> = {};
-    if (KILO_API_KEY) headers["Authorization"] = `Bearer ${KILO_API_KEY}`;
+    const kiloKey = getNextApiKey("kilo");
+    if (kiloKey) headers["Authorization"] = `Bearer ${kiloKey}`;
     const res = await fetch("https://api.kilo.ai/api/gateway/models", {
       headers,
       signal: AbortSignal.timeout(20000),
@@ -98,7 +92,7 @@ async function fetchKiloModels(): Promise<ModelRow[]> {
 
 async function fetchGoogleModels(): Promise<ModelRow[]> {
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${GOOGLE_AI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${getNextApiKey("google")}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
@@ -130,7 +124,7 @@ async function fetchGoogleModels(): Promise<ModelRow[]> {
 async function fetchGroqModels(): Promise<ModelRow[]> {
   try {
     const res = await fetch("https://api.groq.com/openai/v1/models", {
-      headers: { Authorization: `Bearer ${GROQ_API_KEY}` },
+      headers: { Authorization: `Bearer ${getNextApiKey("groq")}` },
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -159,10 +153,11 @@ async function fetchGroqModels(): Promise<ModelRow[]> {
 const NON_CHAT_KEYWORDS = ["whisper", "lyria", "orpheus", "prompt-guard", "safeguard", "compound", "allam"];
 
 async function fetchCerebrasModels(): Promise<ModelRow[]> {
-  if (!CEREBRAS_API_KEY) return [];
+  const cerebrasKey = getNextApiKey("cerebras");
+  if (!cerebrasKey) return [];
   try {
     const res = await fetch("https://api.cerebras.ai/v1/models", {
-      headers: { Authorization: `Bearer ${CEREBRAS_API_KEY}` },
+      headers: { Authorization: `Bearer ${cerebrasKey}` },
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -191,10 +186,11 @@ async function fetchCerebrasModels(): Promise<ModelRow[]> {
 }
 
 async function fetchSambaNovaModels(): Promise<ModelRow[]> {
-  if (!SAMBANOVA_API_KEY) return [];
+  const sambaKey = getNextApiKey("sambanova");
+  if (!sambaKey) return [];
   try {
     const res = await fetch("https://api.sambanova.ai/v1/models", {
-      headers: { Authorization: `Bearer ${SAMBANOVA_API_KEY}` },
+      headers: { Authorization: `Bearer ${sambaKey}` },
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -221,10 +217,11 @@ async function fetchSambaNovaModels(): Promise<ModelRow[]> {
 }
 
 async function fetchMistralModels(): Promise<ModelRow[]> {
-  if (!MISTRAL_API_KEY) return [];
+  const mistralKey = getNextApiKey("mistral");
+  if (!mistralKey) return [];
   try {
     const res = await fetch("https://api.mistral.ai/v1/models", {
-      headers: { Authorization: `Bearer ${MISTRAL_API_KEY}` },
+      headers: { Authorization: `Bearer ${mistralKey}` },
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

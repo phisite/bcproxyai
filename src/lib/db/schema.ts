@@ -99,5 +99,24 @@ function initSchema(db: Database.Database) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_gateway_logs_created ON gateway_logs(created_at);
+
+    -- Budget config (daily token limit etc.)
+    CREATE TABLE IF NOT EXISTS budget_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    -- Token usage tracking per request
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      input_tokens INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      estimated_cost_usd REAL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_token_usage_date ON token_usage(created_at);
   `);
 }
