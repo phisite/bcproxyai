@@ -6,7 +6,7 @@
 
 const BASE_URL = "http://localhost:3333/v1/chat/completions";
 const TOTAL_REQUESTS = 10000;
-const CONCURRENCY = 1000;
+const CONCURRENCY = 20; // realistic: simulate 20 users
 const MODELS = ["auto", "bcproxy/fast", "bcproxy/thai"];
 
 const QUESTIONS_TH = [

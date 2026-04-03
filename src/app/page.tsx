@@ -202,6 +202,17 @@ export default function Dashboard() {
   }
   const [gatewayLogs, setGatewayLogs] = useState<GatewayLog[]>([]);
 
+  interface CostSavings {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    costGpt4o: number;
+    costClaude: number;
+    actualCost: number;
+    totalSaved: number;
+    todaySaved: number;
+  }
+  const [costSavings, setCostSavings] = useState<CostSavings | null>(null);
+
   // Scroll to top on mount
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -215,14 +226,16 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [s, m, l] = await Promise.all([
+      const [s, m, l, cs] = await Promise.all([
         fetch("/api/status").then((r) => r.json()),
         fetch("/api/models").then((r) => r.json()),
         fetch("/api/leaderboard").then((r) => r.json()),
+        fetch("/api/cost-savings").then((r) => r.json()).catch(() => null),
       ]);
       setStatusData(s);
       setModels(Array.isArray(m) ? m : []);
       setLeaderboard(Array.isArray(l) ? l : []);
+      if (cs) setCostSavings(cs);
       setLastRefresh(new Date());
     } catch (err) {
       console.error("fetch error", err);
@@ -453,6 +466,37 @@ export default function Dashboard() {
 
           {/* Gateway Config */}
           <GatewayConfigCard />
+
+          {/* Cost Savings Card */}
+          {costSavings && (costSavings.totalInputTokens + costSavings.totalOutputTokens) > 0 && (
+            <div className="mt-6 glass-bright rounded-2xl p-5 neon-border max-w-3xl mx-auto">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-lg">💰</span>
+                <span className="font-bold text-white text-lg">ประหยัดได้เท่าไหร่?</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="glass rounded-lg p-3 text-center">
+                  <div className="text-xs text-gray-500 mb-1">ใช้ไป (tokens)</div>
+                  <div className="text-lg font-bold text-indigo-300">
+                    {((costSavings.totalInputTokens + costSavings.totalOutputTokens) / 1000).toFixed(0)}K
+                  </div>
+                </div>
+                <div className="glass rounded-lg p-3 text-center">
+                  <div className="text-xs text-gray-500 mb-1">ถ้าใช้ GPT-4o</div>
+                  <div className="text-lg font-bold text-red-400">${costSavings.costGpt4o.toFixed(2)}</div>
+                </div>
+                <div className="glass rounded-lg p-3 text-center">
+                  <div className="text-xs text-gray-500 mb-1">ถ้าใช้ Claude</div>
+                  <div className="text-lg font-bold text-red-400">${costSavings.costClaude.toFixed(2)}</div>
+                </div>
+                <div className="glass rounded-lg p-3 text-center border border-emerald-500/30 bg-emerald-500/5">
+                  <div className="text-xs text-emerald-400 mb-1">BCProxyAI ประหยัด</div>
+                  <div className="text-lg font-bold text-emerald-300">${costSavings.totalSaved.toFixed(2)}</div>
+                  <div className="text-xs text-emerald-500">ฟรี!</div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Stats Cards */}
           <StatsCards stats={stats} loading={loading} />
