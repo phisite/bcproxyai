@@ -503,11 +503,14 @@ export async function POST(req: NextRequest) {
           return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens);
         }
 
-        // Any non-200 → cooldown immediately + try next model
+        // Non-200: cooldown only for rate limit / server errors, skip for others
         const errText = await response.text();
         lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
-        // 413 = short cooldown (15 min), everything else = 2 hours
-        logCooldown(dbModelId, `HTTP ${response.status}: ${errText}`, response.status);
+        const st = response.status;
+        if (st === 429 || st === 413 || st >= 500 || st === 401 || st === 403) {
+          logCooldown(dbModelId, `HTTP ${st}: ${errText}`, st);
+        }
+        // Always retry next model regardless
         continue;
       } catch (err) {
         lastError = `${provider}/${actualModelId}: ${String(err)}`;
