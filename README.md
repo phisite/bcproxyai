@@ -1,70 +1,61 @@
-# BCProxyAI -- Smart AI Gateway
+# BCProxyAI — Smart AI Gateway
 
-ระบบ Gateway อัจฉริยะ สำหรับเลือกโมเดล AI ฟรีที่ดีที่สุดให้อัตโนมัติ  
-รองรับ **8 ผู้ให้บริการ** กว่า **130+ โมเดล** ทั้งคลาวด์และ Local LLM  
-ออกแบบมาสำหรับใช้งานร่วมกับ **[OpenClaw](https://github.com/openclaw/openclaw)** และ **HiClaw**
+Gateway อัจฉริยะที่รวม AI ฟรีจาก **8 ผู้ให้บริการ** กว่า **130+ โมเดล** ไว้ในที่เดียว
+ใช้งานผ่าน **OpenAI-compatible API** — เปลี่ยน base URL แล้วใช้ได้เลย ไม่ต้องแก้โค้ด
 
 ---
 
 ## คำเตือนด้านความปลอดภัย
 
-> **ระบบนี้ไม่มีการยืนยันตัวตน (API Key) ในการเรียกใช้ Gateway**  
-> ห้ามเปิดให้เข้าถึงจากภายนอก (Internet) โดยเด็ดขาด  
->  
-> **แนะนำให้ติดตั้งบน Local (เครื่องตัวเอง) หรือ Network ภายในองค์กรเท่านั้น**  
-> หากต้องการเปิดให้ภายนอกใช้งาน ให้นำ Code ไปแก้ไขเพิ่มระบบ Authentication ก่อน  
->  
-> ไม่มี API Key -- ใครก็ตามที่เข้าถึงพอร์ตได้ จะใช้ได้ทันที
+> **ระบบนี้ไม่มี Authentication**
+> ห้ามเปิดให้เข้าถึงจาก Internet — ใช้บน Local หรือ Network ภายในเท่านั้น
+> ใครก็ตามที่เข้าถึงพอร์ตได้ จะใช้ได้ทันที
 
 ---
 
 ## สารบัญ
 
 - [ภาพรวมระบบ](#ภาพรวมระบบ)
+- [OpenAI API Compliance](#openai-api-compliance)
 - [ผู้ให้บริการ AI ทั้ง 8 เจ้า](#ผู้ให้บริการ-ai-ทั้ง-8-เจ้า)
-- [ติดตั้ง Docker Desktop (สำหรับมือใหม่)](#ติดตั้ง-docker-desktop-สำหรับมือใหม่)
-- [ติดตั้ง BCProxyAI บน Docker](#ติดตั้ง-bcproxyai-บน-docker)
+- [ติดตั้ง Docker Desktop](#ติดตั้ง-docker-desktop)
+- [ติดตั้ง BCProxyAI](#ติดตั้ง-bcproxyai)
 - [ตั้งค่า API Keys](#ตั้งค่า-api-keys)
-- [เชื่อมต่อกับ OpenClaw (ละเอียดมาก)](#เชื่อมต่อกับ-openclaw-ละเอียดมาก)
-- [Virtual Models (โมเดลพิเศษ)](#virtual-models-โมเดลพิเศษ)
-- [ฟีเจอร์เด่น](#ฟีเจอร์เด่น)
+- [เชื่อมต่อกับ OpenClaw](#เชื่อมต่อกับ-openclaw)
+- [Virtual Models](#virtual-models)
+- [ฟีเจอร์ทั้งหมด](#ฟีเจอร์ทั้งหมด)
 - [API Endpoints](#api-endpoints)
-- [Monitoring & Health Check](#monitoring--health-check)
-- [ระบบ Benchmark (คุณครูออกข้อสอบ)](#ระบบ-benchmark-คุณครูออกข้อสอบ)
+- [Health Monitoring](#health-monitoring)
+- [ระบบ Benchmark](#ระบบ-benchmark)
 - [Worker อัตโนมัติ](#worker-อัตโนมัติ)
 - [Dashboard](#dashboard)
-- [ขีดจำกัดของระบบ (Stress Test)](#ขีดจำกัดของระบบ-stress-test)
-- [การแก้ไขปัญหาทั่วไป](#การแก้ไขปัญหาทั่วไป)
-- [ค่าใช้จ่ายในการรัน](#ค่าใช้จ่ายในการรัน)
-- [สร้างด้วยอะไร](#สร้างด้วยอะไร)
+- [Stress Test](#stress-test)
+- [แก้ไขปัญหา](#แก้ไขปัญหา)
+- [ค่าใช้จ่าย](#ค่าใช้จ่าย)
 
 ---
 
 ## ภาพรวมระบบ
 
-BCProxyAI ทำหน้าที่เป็น "ตัวกลาง" ระหว่าง OpenClaw กับผู้ให้บริการ AI ฟรีหลายเจ้า  
-คิดง่ายๆ ว่า: **OpenClaw ส่งคำถามมา -> BCProxyAI เลือกโมเดล AI ฟรีตัวที่ดีที่สุดให้ -> ส่งคำตอบกลับ**
-
 ```
-OpenClaw / HiClaw
+Application (OpenClaw / HiClaw / Python / curl / ...)
         |
         v
 +-------------------------------+
-|     BCProxyAI Gateway         |  <- http://localhost:3333/v1
-|  (ตัวกลางเลือก AI ให้)        |
+|     BCProxyAI Gateway         |  http://localhost:3333/v1
 |                               |
-|  Smart Router                 |  <- เลือก model อัตโนมัติ
-|  - auto/fast/tools/thai       |     หรือเจาะจง provider ตรงๆ
-|  - Weighted load balancing    |     (เรียงตาม score + latency)
-|  - Fallback 10 ครั้ง          |     round-robin ข้าม provider
-|  - ทุกตัว cooldown → สุ่มเลือก |     (ไม่มีวัน 503 ถาวร)
+|  OpenAI-compatible API        |  POST /v1/chat/completions
+|  - auto/fast/tools/thai       |  GET  /v1/models
+|  - consensus (3 models vote)  |  GET  /v1/models/{id}
+|  - weighted load balancing    |
+|  - fallback 10 retries        |
+|  - prompt compression         |
 |  - Configurable fallback      |     FALLBACK_STRATEGY=latency|random|score...
 |                               |
-|  Background Worker            |  <- ทำงานทุก 1 ชม.
-|  1. สแกน 8 providers พร้อมกัน  |
-|  2. Health check 5 concurrent |
-|  3. Benchmark 20 concurrent   |
-|  4. ตั้งชื่อเล่นไทย (DeepSeek) |
+|  Background Worker (ทุก 1 ชม.) |
+|  - สแกน 8 providers           |
+|  - health check               |
+|  - benchmark + ตั้งชื่อเล่น    |
 |                               |
 |  SQLite DB + Dashboard        |
 +-------------------------------+
@@ -78,107 +69,186 @@ OpenClaw / HiClaw
 
 ---
 
+## OpenAI API Compliance
+
+BCProxyAI เป็น **100% OpenAI-compatible API** — ใช้แทน OpenAI ได้เลย
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/chat/completions` | Chat Completions (stream + non-stream) |
+| GET | `/v1/models` | List all models |
+| GET | `/v1/models/{model_id}` | Retrieve a model |
+
+### Response Format
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "groq/llama-4-scout",
+  "system_fingerprint": "fp_bcproxy_a1b2c3d4",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "สวัสดีครับ!",
+      "refusal": null
+    },
+    "finish_reason": "stop",
+    "logprobs": null
+  }],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 20,
+    "total_tokens": 30
+  }
+}
+```
+
+### Error Format
+
+```json
+{
+  "error": {
+    "message": "The model 'xxx' does not exist",
+    "type": "invalid_request_error",
+    "param": "model",
+    "code": "model_not_found"
+  }
+}
+```
+
+| HTTP | type | code |
+|------|------|------|
+| 400 | `invalid_request_error` | `invalid_request` |
+| 401 | `invalid_request_error` | `invalid_api_key` |
+| 404 | `invalid_request_error` | `model_not_found` |
+| 429 | `rate_limit_exceeded` | `rate_limit_exceeded` |
+| 500 | `api_error` | `server_error` |
+| 503 | `api_error` | `server_overloaded` |
+
+### Model Object
+
+```json
+{
+  "id": "groq/llama-4-scout",
+  "object": "model",
+  "created": 1700000000,
+  "owned_by": "groq"
+}
+```
+
+### ใช้งานกับ Library อะไรก็ได้
+
+```python
+# Python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:3333/v1", api_key="dummy")
+response = client.chat.completions.create(
+    model="auto",
+    messages=[{"role": "user", "content": "สวัสดีครับ"}]
+)
+```
+
+```typescript
+// TypeScript
+import OpenAI from 'openai';
+const client = new OpenAI({ baseURL: 'http://localhost:3333/v1', apiKey: 'dummy' });
+const response = await client.chat.completions.create({
+    model: 'auto',
+    messages: [{ role: 'user', content: 'สวัสดีครับ' }]
+});
+```
+
+```bash
+# curl
+curl http://localhost:3333/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}'
+```
+
+> `api_key` ใส่อะไรก็ได้ (ระบบไม่ตรวจ auth) แต่ต้องใส่เพราะ library บังคับ
+
+---
+
 ## ผู้ให้บริการ AI ทั้ง 8 เจ้า
 
-| # | ผู้ให้บริการ | ประเภท | จุดเด่น | ต้องใช้ API Key? |
-|---|-------------|--------|---------|-----------------|
-| 1 | **OpenRouter** | Cloud ฟรี | โมเดลฟรีมากที่สุด | ต้องสมัคร (ฟรี) |
-| 2 | **Kilo AI** | Cloud ฟรี | ไม่ต้องใช้ key เลย | ไม่ต้อง |
-| 3 | **Google AI Studio** | Cloud ฟรี | Gemini models | ต้องสมัคร (ฟรี) |
-| 4 | **Groq** | Cloud ฟรี | เร็วที่สุด | ต้องสมัคร (ฟรี) |
-| 5 | **Cerebras** | Cloud ฟรี | เร็ว | ต้องสมัคร (ฟรี) |
-| 6 | **SambaNova** | Cloud ฟรี | Llama 405B | ต้องสมัคร (ฟรี) |
-| 7 | **Mistral** | Cloud ฟรี | 1B tokens/เดือน | ต้องสมัคร (ฟรี) |
-| 8 | **Ollama** | LOCAL LLM | รันบนเครื่องตัวเอง (gemma3:4b, gemma4:31b ฯลฯ) | ไม่ต้อง |
+| # | Provider | ประเภท | จุดเด่น | API Key |
+|---|----------|--------|---------|---------|
+| 1 | **OpenRouter** | Cloud ฟรี | โมเดลฟรีมากที่สุด | สมัครฟรี |
+| 2 | **Kilo AI** | Cloud ฟรี | ไม่ต้องใช้ key | ไม่ต้อง |
+| 3 | **Google AI Studio** | Cloud ฟรี | Gemini models | สมัครฟรี |
+| 4 | **Groq** | Cloud ฟรี | เร็วที่สุด | สมัครฟรี |
+| 5 | **Cerebras** | Cloud ฟรี | เร็ว | สมัครฟรี |
+| 6 | **SambaNova** | Cloud ฟรี | Llama 405B | สมัครฟรี |
+| 7 | **Mistral** | Cloud ฟรี | 1B tokens/เดือน | สมัครฟรี |
+| 8 | **Ollama** | LOCAL | รันบนเครื่องตัวเอง | ไม่ต้อง |
 
-> **Ollama** เป็น Local LLM ที่รันบนเครื่องของคุณเอง ไม่ต้องส่งข้อมูลออกนอก  
-> BCProxyAI จะลงทะเบียน Ollama model ด้วย 128K context, ส่ง `num_ctx=65536` สำหรับ context ขนาดใหญ่  
-> Ollama จะ **ไม่ถูก cooldown** เด็ดขาด (เพราะเป็นเครื่องตัวเอง ไม่มี rate limit)
-
----
-
-## ติดตั้ง Docker Desktop (สำหรับมือใหม่)
-
-> **Docker คืออะไร?** Docker เป็นโปรแกรมที่ช่วยรันแอปพลิเคชันใน "กล่อง" (Container) แยกส่วนจากเครื่องของคุณ คิดง่ายๆ ว่าเป็น "คอมจำลอง" ที่รันโปรแกรมให้เราโดยไม่ต้องติดตั้งอะไรเพิ่มบนเครื่องจริง
-
-### ขั้นตอนที่ 1: ดาวน์โหลด Docker Desktop
-
-1. เปิดเบราว์เซอร์ ไปที่ **https://www.docker.com/products/docker-desktop/**
-2. กดปุ่ม **"Download for Windows"** (หรือ Mac ถ้าใช้ Mac)
-3. รอดาวน์โหลดเสร็จ (ไฟล์ประมาณ 500MB)
-
-### ขั้นตอนที่ 2: ติดตั้ง Docker Desktop
-
-1. **ดับเบิลคลิก**ไฟล์ที่ดาวน์โหลดมา (Docker Desktop Installer.exe)
-2. ถ้าถูกถาม "Use WSL 2 instead of Hyper-V" ให้ **ติ๊กเลือก** (WSL2 เร็วกว่า)
-3. กด **Ok** แล้วรอติดตั้ง (ประมาณ 2-5 นาที)
-4. กด **Close and restart** เพื่อ restart เครื่อง
-
-### ขั้นตอนที่ 3: เปิด Docker Desktop ครั้งแรก
-
-1. หลัง restart กดเปิดโปรแกรม **Docker Desktop** จาก Start Menu
-2. รอจนเห็นข้อความ **"Docker Desktop is running"** ที่มุมล่างซ้าย (ไอคอนวาฬสีเขียว)
-3. ถ้าเจอหน้า "Accept license" ให้กด **Accept**
-4. ถ้าเจอหน้า "Sign in" สามารถกด **Skip** ได้ (ไม่ต้อง sign in)
-
-### รู้จักหน้าตา Docker Desktop
-
-| แท็บ | คืออะไร |
-|------|--------|
-| **Containers** | กล่องที่กำลังรัน (หลังติดตั้ง BCProxyAI จะเห็นที่นี่) |
-| **Images** | ไฟล์ต้นแบบของกล่อง (คิดเหมือน "แม่พิมพ์") |
-| **Volumes** | ที่เก็บข้อมูลของกล่อง (database อยู่ที่นี่) |
-
-> **สำคัญ:** Docker Desktop ต้องเปิดค้างไว้ตลอดเวลาที่จะใช้ BCProxyAI ถ้าปิด Docker = BCProxyAI จะหยุดทำงาน
+> **Ollama** รันบนเครื่องคุณเอง ไม่ส่งข้อมูลออกนอก
+> BCProxyAI ลงทะเบียน Ollama model ด้วย 128K context, ส่ง `num_ctx=65536`
+> Ollama จะ **ไม่ถูก cooldown** เด็ดขาด (เครื่องตัวเอง ไม่มี rate limit)
 
 ---
 
-## ติดตั้ง BCProxyAI บน Docker
+## ติดตั้ง Docker Desktop
 
-> **Terminal คืออะไร?** หน้าต่างสำหรับพิมพ์คำสั่ง บน Windows เปิดได้โดยกด `Win + R` พิมพ์ `cmd` แล้วกด Enter หรือค้นหา "Terminal" หรือ "PowerShell" จาก Start Menu
+> **Docker คืออะไร?** โปรแกรมที่รันแอปใน "กล่อง" (Container) แยกจากเครื่องจริง
 
-### ขั้นตอนที่ 1: Clone โปรเจค
+### ขั้นตอนที่ 1: ดาวน์โหลด
 
-เปิด Terminal (หน้าต่างพิมพ์คำสั่ง) แล้วพิมพ์:
+1. ไปที่ **https://www.docker.com/products/docker-desktop/**
+2. กด **"Download for Windows"** (หรือ Mac)
+3. รอดาวน์โหลดเสร็จ (~500MB)
+
+### ขั้นตอนที่ 2: ติดตั้ง
+
+1. ดับเบิลคลิกไฟล์ Docker Desktop Installer.exe
+2. ติ๊กเลือก "Use WSL 2 instead of Hyper-V"
+3. กด Ok แล้วรอ (2-5 นาที)
+4. กด Close and restart
+
+### ขั้นตอนที่ 3: เปิดครั้งแรก
+
+1. เปิด **Docker Desktop** จาก Start Menu
+2. รอจนเห็น **"Docker Desktop is running"** (ไอคอนวาฬสีเขียว)
+3. Accept license, Skip sign in
+
+> Docker Desktop ต้องเปิดค้างไว้ตลอดเวลาที่ใช้ BCProxyAI
+
+---
+
+## ติดตั้ง BCProxyAI
+
+### ขั้นตอนที่ 1: Clone
 
 ```bash
 git clone https://github.com/jaturapornchai/bcproxyai.git
 cd bcproxyai
 ```
 
-> **ผลลัพธ์ที่ควรเห็น:**
-> ```
-> Cloning into 'bcproxyai'...
-> remote: Enumerating objects: ...
-> Receiving objects: 100% ...
-> ```
-
-### ขั้นตอนที่ 2: สร้างไฟล์ .env.local
+### ขั้นตอนที่ 2: สร้าง .env.local
 
 ```bash
 cp .env.example .env.local
 ```
 
-จากนั้นเปิดไฟล์ `.env.local` ด้วย text editor (เช่น Notepad) แล้วใส่ API Key:
+เปิด `.env.local` แล้วใส่ API Key:
 
 ```env
-# จำเป็น -- สมัครฟรีที่ https://openrouter.ai/keys
+# จำเป็น
 OPENROUTER_API_KEY=sk-or-v1-xxxx
-
-# จำเป็น -- สมัครฟรีที่ https://console.groq.com/keys
 GROQ_API_KEY=gsk_xxxx
 
-# ไม่บังคับ -- ถ้าไม่ใส่ จะข้ามการสแกน
+# ไม่บังคับ
 KILO_API_KEY=
 GOOGLE_AI_API_KEY=
 CEREBRAS_API_KEY=
 SAMBANOVA_API_KEY=
 MISTRAL_API_KEY=
-
-# ไม่บังคับ -- สำหรับ DeepSeek Judge (ตรวจข้อสอบ benchmark)
 DEEPSEEK_API_KEY=
-
-# ไม่บังคับ -- Ollama (ถ้ารันบนเครื่อง)
 OLLAMA_BASE_URL=http://localhost:11434
 
 # === Fallback Strategy (เลือก model ยังไงเมื่อ model แรก fail) ===
@@ -192,113 +262,54 @@ OLLAMA_BASE_URL=http://localhost:11434
 FALLBACK_STRATEGY=latency
 ```
 
-(ดูวิธีสมัครที่หัวข้อ [ตั้งค่า API Keys](#ตั้งค่า-api-keys))
-
-### ขั้นตอนที่ 3: Build (สร้างกล่อง)
-
-พิมพ์คำสั่งนี้ใน Terminal:
+### ขั้นตอนที่ 3: Build + Start
 
 ```bash
-docker compose build
+docker compose build    # สร้าง image (ครั้งแรก 3-10 นาที)
+docker compose up -d    # เริ่มรัน
 ```
 
-> **รอจนเสร็จ** (ครั้งแรกใช้เวลาประมาณ 3-10 นาที ขึ้นอยู่กับความเร็วเน็ต)  
-> **ผลลัพธ์ที่ควรเห็น:**
-> ```
-> [+] Building ...
-> => [internal] load build definition ...
-> ...
-> => exporting to image
-> ```
+### ขั้นตอนที่ 4: เปิด Dashboard
 
-> **ถ้าเจอ error:** ตรวจสอบว่า Docker Desktop เปิดอยู่ (ไอคอนวาฬสีเขียว)
+เปิด **http://localhost:3333** — Worker จะเริ่มสแกนโมเดลอัตโนมัติ
 
-### ขั้นตอนที่ 4: Start (เริ่มรัน)
+### ติดตั้งแบบไม่ใช้ Docker
 
 ```bash
-docker compose up -d
+npm ci && npm run build && npm start    # เปิดที่ http://localhost:3000
 ```
-
-> `-d` หมายถึง "รันเบื้องหลัง" (detached) -- Terminal จะกลับมาให้พิมพ์คำสั่งอื่นได้  
-> **ผลลัพธ์ที่ควรเห็น:**
-> ```
-> [+] Running 1/1
->  ✓ Container bcproxyai-bcproxyai-1  Started
-> ```
-
-### ขั้นตอนที่ 5: เปิด Dashboard ดู
-
-1. เปิดเบราว์เซอร์
-2. พิมพ์ **http://localhost:3333** แล้วกด Enter
-3. จะเห็น Dashboard ของ BCProxyAI
-
-> Worker จะเริ่มสแกนโมเดลอัตโนมัติทันที รอสักครู่จะเห็นโมเดลเริ่มปรากฏ  
-> หรือกดปุ่ม **"รันตอนนี้"** บน Dashboard เพื่อเร่ง
-
-### ติดตั้งแบบ Manual (ไม่ใช้ Docker)
-
-ถ้าไม่อยากใช้ Docker ต้องมี **Node.js 20+** ติดตั้งบนเครื่อง:
-
-```bash
-npm ci              # ติดตั้ง dependencies
-npm run build       # Build โปรเจค
-npm start           # เริ่มรัน
-```
-
-เข้าใช้งานที่ **http://localhost:3000** (พอร์ต 3000 ไม่ใช่ 3333)
 
 ---
 
 ## ตั้งค่า API Keys
 
-API Key คือ "กุญแจ" สำหรับเข้าถึงบริการ AI ของแต่ละเจ้า สมัครฟรีทั้งหมด:
+| Provider | ลิงก์สมัคร | หมายเหตุ |
+|----------|-----------|----------|
+| **OpenRouter** | https://openrouter.ai/keys | **จำเป็น** |
+| **Groq** | https://console.groq.com/keys | **จำเป็น** |
+| **Kilo AI** | https://kilo.ai | ไม่บังคับ |
+| **Google AI Studio** | https://aistudio.google.com/apikey | ไม่บังคับ |
+| **Cerebras** | https://cloud.cerebras.ai | ไม่บังคับ |
+| **SambaNova** | https://cloud.sambanova.ai | ไม่บังคับ |
+| **Mistral** | https://console.mistral.ai | ไม่บังคับ |
+| **Ollama** | https://ollama.com | ไม่บังคับ |
 
-| ผู้ให้บริการ | ลิงก์สมัคร | หมายเหตุ |
-|-------------|-----------|----------|
-| **OpenRouter** | https://openrouter.ai/keys | **จำเป็น** -- สมัครฟรี มีโมเดลฟรีมากที่สุด |
-| **Groq** | https://console.groq.com/keys | **จำเป็น** -- สมัครฟรี เร็วมาก |
-| **Kilo AI** | https://kilo.ai | ไม่บังคับ -- ไม่ต้องใช้ key ก็สแกนได้ |
-| **Google AI Studio** | https://aistudio.google.com/apikey | ไม่บังคับ -- สมัครฟรี |
-| **Cerebras** | https://cloud.cerebras.ai | ไม่บังคับ -- สมัครฟรี |
-| **SambaNova** | https://cloud.sambanova.ai | ไม่บังคับ -- สมัครฟรี Llama 405B |
-| **Mistral** | https://console.mistral.ai | ไม่บังคับ -- สมัครฟรี 1B tokens/เดือน |
-| **Ollama** | https://ollama.com | ไม่บังคับ -- ติดตั้งบนเครื่อง ไม่ต้อง key |
+### Auto API Key Rotation
 
-### วิธีสมัคร (ตัวอย่าง OpenRouter)
-
-1. เปิด https://openrouter.ai/keys
-2. กด "Create Account" หรือ Sign in ด้วย Google
-3. กด "Create Key"
-4. **Copy key** (ขึ้นต้นด้วย `sk-or-v1-`)
-5. วางใน `.env.local` ที่บรรทัด `OPENROUTER_API_KEY=`
-
-### Auto API Key Rotation (หลาย key ต่อ provider)
-
-รองรับ API Key หลายตัวต่อ provider -- ใส่คั่นด้วยจุลภาค (comma):
+ใส่ key หลายตัวคั่นด้วย comma:
 
 ```env
 OPENROUTER_API_KEY=key1,key2,key3
 GROQ_API_KEY=keyA,keyB
 ```
 
-- ระบบสลับ key แบบ round-robin อัตโนมัติ
-- ถ้า key ไหนติด rate limit จะพัก 5 นาที แล้วใช้ key ถัดไป
-- เพิ่ม throughput ได้หลายเท่า!
+ระบบสลับ round-robin อัตโนมัติ — key ติด rate limit จะพัก 5 นาทีแล้วใช้ตัวถัดไป
 
 ---
 
-## เชื่อมต่อกับ OpenClaw (ละเอียดมาก)
+## เชื่อมต่อกับ OpenClaw
 
-> **OpenClaw คืออะไร?** OpenClaw เป็น AI coding assistant ที่ทำงานใน Terminal ช่วยเขียนโค้ดให้ BCProxyAI ทำให้ OpenClaw ใช้โมเดล AI ฟรีได้โดยไม่ต้องจ่ายเงิน
-
-### วิธีที่ 1: OpenClaw บน Docker (BCProxyAI รันบน Docker ด้วย)
-
-> **ทำไมต้อง host.docker.internal?**  
-> เมื่อ OpenClaw กับ BCProxyAI รันบน Docker คนละ Container จะเรียก `localhost` หากันไม่ได้ ต้องใช้ `host.docker.internal` เพื่อให้ Container เข้าถึง host machine (เครื่องจริงของคุณ)
-
-#### ขั้นตอนที่ 1: onboard OpenClaw ให้ชี้มา BCProxyAI
-
-เปิด Terminal (หน้าต่างพิมพ์คำสั่ง) แล้วพิมพ์คำสั่งนี้ทั้งหมด (copy ทั้งบล็อก):
+### Docker (OpenClaw + BCProxyAI อยู่บน Docker)
 
 ```bash
 openclaw onboard \
@@ -309,122 +320,25 @@ openclaw onboard \
   --custom-model-id auto \
   --custom-api-key dummy \
   --custom-compatibility openai \
-  --skip-channels \
-  --skip-daemon \
-  --skip-health \
-  --skip-search \
-  --skip-skills \
-  --skip-ui
+  --skip-channels --skip-daemon --skip-health --skip-search --skip-skills --skip-ui
 ```
 
-> **ผลลัพธ์ที่ควรเห็น:**
-> ```
-> Onboarding complete!
-> Provider: custom-host-docker-internal-3333/auto
-> ```
+> ใช้ `host.docker.internal` เพราะ Container เรียก `localhost` หากันไม่ได้
 
-> **อธิบายคำสั่ง:**
-> - `--custom-base-url` = บอกว่า BCProxyAI อยู่ที่ไหน
-> - `--custom-api-key dummy` = ใส่อะไรก็ได้ เพราะ BCProxyAI ไม่มี authentication
-> - `--custom-model-id auto` = ให้ BCProxyAI เลือกโมเดลให้อัตโนมัติ
-> - `--skip-*` = ข้ามขั้นตอนที่ไม่จำเป็นตอน onboard
-
-#### ขั้นตอนที่ 2: แก้ไข openclaw.json
-
-หลัง onboard เสร็จ OpenClaw จะสร้าง config ให้อัตโนมัติ ตรวจสอบว่าถูกต้อง:
-
-1. หาไฟล์ `openclaw.json` (ปกติอยู่ใน `~/.openclaw/openclaw.json`)
-2. ดูส่วน `models.providers` จะเห็น provider ที่เพิ่งสร้าง:
-
-```json
-{
-  "models": {
-    "providers": {
-      "custom-host-docker-internal-3333": {
-        "baseUrl": "http://host.docker.internal:3333/v1",
-        "apiKey": "dummy",
-        "api": "openai-completions",
-        "models": [{
-          "id": "auto",
-          "name": "BCProxyAI Auto",
-          "contextWindow": 131072,
-          "maxTokens": 8192
-        }]
-      }
-    }
-  },
-  "agents": {
-    "defaults": {
-      "model": { "primary": "custom-host-docker-internal-3333/auto" }
-    }
-  }
-}
-```
-
-> **ตรวจสอบให้แน่ใจว่า:**
-> - `api` เป็น `"openai-completions"` (onboard ตั้งให้อัตโนมัติ)
-> - `contextWindow` เป็น `131072` (128K) -- ถ้าค่าน้อยกว่านี้ให้แก้ เพราะ OpenClaw ส่ง system prompt ใหญ่มาก
-> - BCProxyAI จะเลือกโมเดลที่มี context window พอกับ request ให้อัตโนมัติ
-
-#### ขั้นตอนที่ 3: แก้ปัญหา "pairing required"
-
-> **ปัญหานี้เกิดเมื่อไหร่?** เมื่อ OpenClaw รันใน Docker แล้วพยายามเชื่อมต่อกับ Gateway อาจเจอ error "pairing required" -- หมายถึง Device ยังไม่ได้รับอนุญาต
-
-วิธีแก้ -- พิมพ์ทีละบรรทัด:
+ถ้าเจอ "pairing required":
 
 ```bash
-# ขั้นที่ 1: ดูรายการ devices ที่รอ approve
-openclaw devices list
+openclaw devices list                    # ดู requestId
+openclaw devices approve <requestId>     # อนุมัติ
 ```
 
-> **ผลลัพธ์ที่ควรเห็น:**
-> ```
-> Pending devices:
->   requestId: abc123-def456-...
->   name: docker-container-xxx
-> ```
-
-```bash
-# ขั้นที่ 2: approve device (เอา requestId จากข้างบนมาใส่)
-openclaw devices approve abc123-def456-...
-```
-
-> **ผลลัพธ์ที่ควรเห็น:**
-> ```
-> Device approved successfully
-> ```
-
-#### ขั้นตอนที่ 4: แก้ปัญหา "origin not allowed"
-
-> **ปัญหานี้เกิดเมื่อไหร่?** เมื่อ Gateway ถูก bind แบบ "loopback" (รับเฉพาะ 127.0.0.1) แต่ Docker Container เรียกมาจาก IP อื่น
-
-วิธีแก้ -- แก้ส่วน `gateway` ใน openclaw.json:
+ถ้าเจอ "origin not allowed" — แก้ `openclaw.json`:
 
 ```json
-{
-  "gateway": {
-    "bind": "lan",
-    "controlUi": {
-      "allowedOrigins": [
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:18790",
-        "http://127.0.0.1:18790"
-      ]
-    }
-  }
-}
+{ "gateway": { "bind": "lan" } }
 ```
 
-> **อธิบาย:**
-> - `"bind": "lan"` = เปิดให้เครื่องอื่นใน network เข้าถึงได้ (ไม่ใช่แค่ตัวเอง)
-> - `allowedOrigins` = รายชื่อ URL ที่อนุญาตให้เปิด Dashboard (ใส่ port ที่ map จาก Docker ด้วย)
-
-### วิธีที่ 2: OpenClaw แบบ CLI Native (ไม่ใช้ Docker)
-
-> ถ้า OpenClaw รันบนเครื่องโดยตรง (ไม่ใช่ Docker) ง่ายกว่ามาก -- ใช้ `localhost` ได้เลย
-
-#### ขั้นตอนที่ 1: onboard
+### CLI Native (ไม่ใช้ Docker)
 
 ```bash
 openclaw onboard \
@@ -435,49 +349,31 @@ openclaw onboard \
   --custom-model-id auto \
   --custom-api-key dummy \
   --custom-compatibility openai \
-  --skip-channels \
-  --skip-daemon \
-  --skip-health \
-  --skip-search \
-  --skip-skills \
-  --skip-ui
+  --skip-channels --skip-daemon --skip-health --skip-search --skip-skills --skip-ui
 ```
 
-> เท่านี้เลย! onboard จะตั้งค่า provider ให้อัตโนมัติ (api: openai-completions, contextWindow ฯลฯ)  
-> ไม่ต้องแก้ openclaw.json เพิ่ม ไม่ต้อง approve device
+### Checklist
 
-### Tool Call Parameter Fix
-
-BCProxyAI แก้ปัญหา tool call parameters อัตโนมัติ -- OpenClaw web_search บางทีส่ง number เป็น string (เช่น `"5"` แทน `5`) ระบบจะแปลง string ที่เป็นตัวเลขให้เป็น number อัตโนมัติ ไม่ต้องทำอะไรเพิ่ม
-
-### Checklist เชื่อมต่อ OpenClaw (เช็คทีละข้อ)
-
-- [ ] Docker Desktop เปิดอยู่ (ไอคอนวาฬสีเขียว)
-- [ ] BCProxyAI Docker รันอยู่ (`docker compose up -d`)
-- [ ] เปิด http://localhost:3333 ได้ (เห็น Dashboard)
-- [ ] Worker สแกนเสร็จ มีโมเดลพร้อมใช้ (ดูจาก Dashboard)
-- [ ] `openclaw onboard` เสร็จเรียบร้อย (ไม่ต้องแก้ openclaw.json เพิ่ม ถ้าใช้คำสั่งข้างบน)
-- [ ] ถ้าใช้ Docker: base URL เป็น `host.docker.internal:3333`
-- [ ] ถ้าใช้ Docker: approve pairing แล้ว (`openclaw devices approve`)
-- [ ] ถ้าใช้ Docker: gateway bind เป็น `"lan"` + allowedOrigins ถูกต้อง
-- [ ] ทดสอบ: `curl http://localhost:3333/v1/models` ตอบรายชื่อโมเดลกลับมา
+- [ ] Docker Desktop เปิดอยู่
+- [ ] BCProxyAI รันอยู่ (`docker compose up -d`)
+- [ ] http://localhost:3333 เปิดได้
+- [ ] Worker สแกนเสร็จ มีโมเดลพร้อมใช้
+- [ ] `openclaw onboard` สำเร็จ
+- [ ] ทดสอบ: `curl http://localhost:3333/v1/models`
 
 ---
 
-## Virtual Models (โมเดลพิเศษ)
-
-BCProxyAI มีโมเดลพิเศษ 4 ตัว -- ไม่ใช่โมเดลจริง แต่เป็น "ชื่อลัด" ที่ BCProxyAI จะเลือกโมเดลจริงให้:
+## Virtual Models
 
 | Model ID | พฤติกรรม |
 |----------|---------|
-| `auto` หรือ `bcproxy/auto` | เลือกโมเดลที่คะแนน benchmark สูงสุด |
-| `bcproxy/fast` | เลือกโมเดลที่ตอบเร็วที่สุด (latency ต่ำสุด) |
-| `bcproxy/tools` | เลือกโมเดลที่รองรับ tool calling (เช่น เรียกฟังก์ชัน) |
-| `bcproxy/thai` | เลือกโมเดลที่เก่งภาษาไทย (คะแนน benchmark สูงสุด) |
+| `auto` / `bcproxy/auto` | คะแนน benchmark สูงสุด |
+| `bcproxy/fast` | latency ต่ำสุด |
+| `bcproxy/tools` | รองรับ tool calling |
+| `bcproxy/thai` | เก่งภาษาไทย |
+| `bcproxy/consensus` | ส่ง 3 models ให้ vote เลือกคำตอบดีสุด |
 
-### การใช้โมเดลตรง (Direct Provider Routing)
-
-ถ้าอยากเจาะจงโมเดล ระบุ provider + model ID ตรงๆ ได้:
+### Direct Provider Routing
 
 ```
 groq/llama-3.3-70b-versatile
@@ -489,527 +385,321 @@ ollama/gemma3:4b
 ollama/gemma4:31b
 ```
 
-### การตรวจจับอัตโนมัติ
+### Auto-Detection
 
-แม้จะใช้ `auto` แต่ถ้า request มีลักษณะพิเศษ ระบบจะตรวจจับและเลือกให้เหมาะ:
-
-- มี `tools` ใน request -> เลือกเฉพาะโมเดลที่รองรับ tool calling
-- มี `image_url` ใน messages -> เลือกเฉพาะโมเดลที่รองรับ vision (ดูรูป)
-- มี `response_format: json_schema` -> เลือกโมเดลขนาดใหญ่ที่จัดการ JSON ได้ดี
-
-### Smart Context-Aware Selection
-
-ระบบจะประมาณจำนวน token ของ request แล้วเลือกเฉพาะโมเดลที่มี context window เพียงพอ
-
-ถ้าเกิด error 413 (payload too large):
-- โมเดลนั้นจะถูก cooldown 15 นาที
-- ระบบ fallback ไปโมเดลอื่นทันที (สูงสุด 10 ครั้ง กระจายข้าม provider แบบ round-robin)
+- มี `tools` → เลือกเฉพาะโมเดลที่รองรับ tool calling
+- มี `image_url` → เลือกเฉพาะโมเดลที่รองรับ vision
+- มี `response_format: json_schema` → เลือกโมเดลขนาดใหญ่
 
 ---
 
-## ฟีเจอร์เด่น
+## ฟีเจอร์ทั้งหมด
 
 ### Weighted Load Balancing
 
-ระบบกระจายโหลดอัจฉริยะ:
-- เรียง provider ตาม weight: **คะแนนสูง + latency ต่ำ = ได้ request ก่อน**
-- Round-robin ข้าม provider (ไม่กระจุกที่ตัวเดียว)
-- Fallback สูงสุด **10 ครั้ง** ข้ามทุก provider
-- ถ้าทุกตัว cooldown -> **สุ่มจากทั้งหมด** (ไม่มีวัน 503 ถาวร)
-- Model ที่ทำงานสำเร็จ -> **clear cooldown ทันที**
+- เรียง provider ตาม weight: **คะแนนสูง + latency ต่ำ = ได้ก่อน**
+- Round-robin ข้าม provider (ไม่กระจุก)
+- Fallback สูงสุด **10 ครั้ง**
+- ทุกตัว cooldown → **สุ่มจากทั้งหมด** (ไม่มีวัน 503 ถาวร)
+- Model สำเร็จ → **clear cooldown ทันที**
 
 ### Smart Cooldown
 
-Cooldown ตาม error type -- ไม่ใช่ one-size-fits-all:
-
 | Error | Cooldown | เหตุผล |
 |-------|----------|--------|
-| 413 (request ใหญ่) | 15 นาที | ลองใหม่ได้เร็ว |
-| 429 (rate limit) | 30 นาที | รอ limit reset |
-| 422 (unprocessable) | 30 นาที | ข้อมูลผิดรูปแบบ |
-| 5xx (server error) | 1 ชม. | provider มีปัญหา |
-| 401/403 (auth error) | 24 ชม. | key หมดอายุ/ผิด |
-| Ollama | ไม่ cooldown เด็ดขาด | เครื่องตัวเอง ไม่มี rate limit |
-| 400 / อื่นๆ | ไม่ cooldown | แค่ skip ไป model ถัดไป |
+| 413 | 15 นาที | request ใหญ่เกินไป |
+| 429 | 30 นาที | rate limit |
+| 422 | 30 นาที | ข้อมูลผิดรูปแบบ |
+| 5xx | 1 ชม. | provider มีปัญหา |
+| 401/403 | 24 ชม. | key หมดอายุ/ผิด |
+| Ollama | ไม่ cooldown | เครื่องตัวเอง |
 
-### Tool Call Parameter Fix
-
-แก้ปัญหา tool call อัตโนมัติ:
-- OpenClaw web_search บางทีส่ง parameter เป็น string แทนที่จะเป็น number (เช่น `"5"` แทน `5`)
-- BCProxyAI จะ **auto-convert string ที่เป็นตัวเลขให้เป็น number** ก่อนส่งต่อ
-- ไม่ต้องแก้อะไรฝั่ง OpenClaw
-
-### Reasoning-to-Content Fix
-
-สำหรับ Ollama gemma4:
-- บาง model ใส่คำตอบใน `reasoning` field แทน `content`
-- BCProxyAI จะ **ย้าย reasoning field ไปเป็น content** อัตโนมัติ
-- ทำให้ OpenClaw อ่านคำตอบได้ถูกต้อง
-
-### Token Budget (ควบคุมการใช้งาน)
-
-ตั้ง budget จำกัดการใช้ token ต่อวัน:
+### Multi-Model Consensus
 
 ```bash
-# ตั้ง budget 1 ล้าน tokens/วัน
+curl http://localhost:3333/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"bcproxy/consensus","messages":[{"role":"user","content":"อะไรดี?"}]}'
+```
+
+- ส่งไป 3 models จาก 3 providers พร้อมกัน
+- เลือกคำตอบยาวที่สุด + เร็วที่สุด
+- Header `X-BCProxy-Consensus` แสดงผู้เข้าแข่ง
+
+### Prompt Compression
+
+- ข้อความยาวเกิน 30K tokens ถูกบีบอัดอัตโนมัติ
+- ประหยัด token 20-40% โดยไม่เสียเนื้อหา
+
+### Token Budget
+
+```bash
 curl -X POST http://localhost:3333/api/budget \
   -H "Content-Type: application/json" \
   -d '{"dailyLimit": 1000000}'
-
-# ดู budget ปัจจุบัน
-curl http://localhost:3333/api/budget
 ```
 
-- ใช้ไป **80%** -> สลับไป model ที่ประหยัดกว่า
-- ใช้ไป **95%** -> หยุดรับ request ชั่วคราว (ป้องกันค่าใช้จ่ายบาน)
+- ใช้ 80% → สลับ model ประหยัด
+- ใช้ 95% → หยุดรับ request ชั่วคราว
 
-### Cost Calculator (คำนวณเงินที่ประหยัดได้)
-
-ดูว่าถ้าใช้ paid API จะเสียเงินเท่าไหร่:
+### Cost Calculator
 
 ```bash
 curl http://localhost:3333/api/cost-savings
 ```
 
-เปรียบเทียบกับ 5 บริการชั้นนำ (ราคาจริงจากเว็บทางการ):
+| บริการ | Input | Output |
+|--------|-------|--------|
+| GPT-4o | $2.50/M | $10.00/M |
+| Claude Sonnet 4.6 | $3.00/M | $15.00/M |
+| Gemini 2.5 Pro | $1.25/M | $10.00/M |
+| Qwen Plus | $0.40/M | $1.20/M |
+| DeepSeek V3 | $0.28/M | $0.42/M |
+| **BCProxyAI** | **ฟรี** | **ฟรี** |
 
-| บริการ | ค่า Input | ค่า Output |
-|--------|----------|-----------|
-| GPT-4o | $2.50/M tokens | $10.00/M tokens |
-| Claude Sonnet 4.6 | $3.00/M tokens | $15.00/M tokens |
-| Gemini 2.5 Pro | $1.25/M tokens | $10.00/M tokens |
-| Qwen Plus | $0.40/M tokens | $1.20/M tokens |
-| DeepSeek V3 | $0.28/M tokens | $0.42/M tokens |
-| **BCProxyAI** | **ฟรี!** | **ฟรี!** |
+### Auto-Fixes
 
-แสดงยอดสะสมทั้ง USD และ THB (บาท)
+- **Tool Call Parameter**: string numbers → actual numbers (`"5"` → `5`)
+- **Reasoning-to-Content**: Ollama gemma4 ใส่คำตอบใน reasoning field → ย้ายเป็น content อัตโนมัติ
+- **OpenAI Response Fields**: เติม `id`, `system_fingerprint`, `usage.total_tokens`, `logprobs`, `refusal` ให้ครบ
 
-### In-Memory Caching
+### Charts & Analytics
 
-ระบบมี cache ในตัว ลด load ไป database:
-
-| ข้อมูล | Cache TTL | หมายเหตุ |
-|--------|----------|---------|
-| รายชื่อ model (gateway) | 10 วินาที | Clear อัตโนมัติเมื่อ cooldown เปลี่ยน |
-| API status/models/leaderboard | 5 วินาที | ลด DB hit จาก dashboard refresh |
-| Health check | 5 วินาที | ไม่ query DB ซ้ำถี่เกินไป |
-
-### Input Validation
-
-Gateway ตรวจสอบ request ก่อนประมวลผล:
-- `messages` ต้องเป็น array ที่ไม่ว่าง
-- `model` ต้องเป็น string (ถ้าระบุ)
-- ตอบ 400 พร้อมข้อความอธิบายถ้าผิด format
+Dashboard แสดงกราฟ 4 ประเภท:
+- สถิติรายผู้ให้บริการ
+- ปริมาณ request รายชั่วโมง
+- Top 10 models
+- Token usage รายวัน
 
 ---
 
 ## API Endpoints
 
-### Gateway (OpenAI Compatible)
+### Gateway (OpenAI-compatible)
 
-| Method | Path | คำอธิบาย |
-|--------|------|---------|
-| POST | `/v1/chat/completions` | ส่งข้อความแชท (รองรับ stream) |
-| GET | `/v1/models` | รายชื่อโมเดลทั้งหมด + สถานะ |
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/chat/completions` | Chat (stream + non-stream) |
+| GET | `/v1/models` | List all models |
+| GET | `/v1/models/{model_id}` | Get single model |
 
-**ตัวอย่าง: ส่งข้อความ**
+**Response Headers:**
 
-```bash
-curl -X POST http://localhost:3333/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "auto",
-    "messages": [{"role": "user", "content": "สวัสดีครับ"}],
-    "stream": false
-  }'
-```
-
-**ตัวอย่าง: Stream (ตอบทีละคำ)**
-
-```bash
-curl -X POST http://localhost:3333/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "auto",
-    "messages": [{"role": "user", "content": "สวัสดีครับ"}],
-    "stream": true
-  }'
-```
-
-**ตัวอย่าง: ใช้ Ollama ตรง**
-
-```bash
-curl -X POST http://localhost:3333/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "ollama/gemma3:4b",
-    "messages": [{"role": "user", "content": "สวัสดีครับ"}],
-    "stream": false
-  }'
-```
-
-**Response Headers พิเศษ:**
-
-| Header | คำอธิบาย |
-|--------|---------|
+| Header | Description |
+|--------|-------------|
 | `X-BCProxy-Model` | โมเดลที่ถูกเลือกใช้จริง |
-| `X-BCProxy-Provider` | ผู้ให้บริการ (openrouter/kilo/groq/cerebras/sambanova/mistral/ollama) |
+| `X-BCProxy-Provider` | ผู้ให้บริการ |
+| `X-BCProxy-Consensus` | ผู้เข้าแข่ง consensus (เฉพาะ consensus mode) |
 
 ### Dashboard API
 
-| Method | Path | คำอธิบาย |
-|--------|------|---------|
-| GET | `/api/status` | สถานะ worker + สถิติ + โมเดลใหม่/หายไป |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/status` | Worker status + สถิติ |
 | GET | `/api/models` | โมเดลทั้งหมด + health + benchmark |
-| GET | `/api/leaderboard` | อันดับโมเดลตามคะแนน |
-| GET | `/api/worker` | สถานะ worker |
-| POST | `/api/worker` | สั่ง worker รันทันที |
-| POST | `/api/chat` | Chat API สำหรับ Dashboard |
-| GET | `/api/gateway-logs` | Gateway request/response logs (รองรับ pagination) |
-| GET | `/api/budget` | Budget สถานะ token usage วันนี้ |
-| POST | `/api/budget` | ตั้ง daily token limit |
-| GET | `/api/cost-savings` | คำนวณเงินที่ประหยัดได้ vs paid API |
-| GET | `/api/health` | Health check -- status healthy/degraded/down + Thai alerts |
+| GET | `/api/leaderboard` | อันดับโมเดล |
+| GET/POST | `/api/worker` | สถานะ / สั่ง worker รัน |
+| POST | `/api/chat` | Chat สำหรับ Dashboard |
+| GET | `/api/gateway-logs` | Gateway logs (pagination) |
+| GET/POST | `/api/budget` | Token budget |
+| GET | `/api/cost-savings` | คำนวณเงินประหยัด |
+| GET | `/api/health` | Health check |
+| GET | `/api/analytics` | Charts data |
 
 ---
 
-## Monitoring & Health Check
-
-ตรวจสอบสถานะระบบทั้งหมดผ่าน endpoint เดียว:
+## Health Monitoring
 
 ```bash
 curl http://localhost:3333/api/health
 ```
-
-**ผลลัพธ์:**
 
 ```json
 {
   "status": "healthy",
   "checks": {
     "database": { "ok": true, "latencyMs": 0 },
-    "providers": { "total": 132, "available": 66, "cooldown": 30, "percentAvailable": 50 },
-    "worker": { "status": "idle", "lastRun": "2026-04-03T01:00:19Z", "minutesSinceLastRun": 15 },
+    "providers": { "total": 132, "available": 66, "percentAvailable": 50 },
+    "worker": { "status": "idle", "minutesSinceLastRun": 15 },
     "gateway": { "recentSuccessRate": 95, "avgLatencyMs": 2800 }
   },
   "alerts": []
 }
 ```
 
-### สถานะ 3 ระดับ
-
 | สถานะ | เงื่อนไข |
 |-------|---------|
-| **healthy** | providers > 20% available, worker รันภายใน 2 ชม., success rate > 50% |
-| **degraded** | บางเงื่อนไขไม่ผ่าน (แต่ยังใช้งานได้) |
-| **down** | providers = 0% available หรือ database ไม่ตอบ |
-
-### แจ้งเตือนอัตโนมัติ (alerts ภาษาไทย)
-
-| เหตุการณ์ | ข้อความ |
-|----------|---------|
-| ทุกโมเดล cooldown | "ทุกโมเดลติด cooldown -- อาจถูก rate limit ทั้งหมด" |
-| Worker หยุดนาน | "Worker ไม่ทำงานมา X ชม." |
-| Success rate ต่ำ | "Success rate ต่ำกว่า 50%" |
-| DB ช้า | "Database latency สูง (> 100ms)" |
-
-### ใช้งานจริง
-
-เหมาะสำหรับต่อกับ Uptime monitoring เช่น [UptimeRobot](https://uptimerobot.com/), [Healthchecks.io](https://healthchecks.io/) หรือเขียน cron ตรวจเอง:
-
-```bash
-# ตรวจทุก 5 นาที -- ถ้า status ไม่ใช่ healthy ให้แจ้งเตือน
-curl -s http://localhost:3333/api/health | grep -q '"healthy"' || echo "ALERT: BCProxyAI degraded!"
-```
+| **healthy** | providers > 20%, worker ภายใน 2 ชม., success rate > 50% |
+| **degraded** | บางเงื่อนไขไม่ผ่าน |
+| **down** | providers 0% หรือ DB ไม่ตอบ |
 
 ---
 
-## ระบบ Benchmark (คุณครูออกข้อสอบ)
+## ระบบ Benchmark
 
-BCProxyAI ใช้ระบบ **"ให้ AI ตรวจข้อสอบ AI"** -- โมเดลหนึ่งตอบคำถาม อีกโมเดลหนึ่งเป็นคุณครูตรวจให้คะแนน
+ระบบ "AI ตรวจข้อสอบ AI" — 3 คำถามภาษาไทย, คะแนน 0-10
 
-### ข้อสอบ (3 ข้อ ภาษาไทย)
+### ข้อสอบ
 
-| ข้อ | คำถาม | ทดสอบอะไร |
-|-----|-------|----------|
-| 1 | "สวัสดีครับ วันนี้อากาศเป็นยังไงบ้าง?" | ทักทาย + ตอบคำถามทั่วไป |
-| 2 | "แนะนำอาหารไทยมา 3 เมนู" | ความรู้วัฒนธรรมไทย + จัดรูปแบบ |
-| 3 | "กรุงเทพมหานครอยู่ประเทศอะไร?" | ความรู้ทั่วไป + ตอบถูก |
+| ข้อ | คำถาม |
+|-----|-------|
+| 1 | "สวัสดีครับ วันนี้อากาศเป็นยังไงบ้าง?" |
+| 2 | "แนะนำอาหารไทยมา 3 เมนู" |
+| 3 | "กรุงเทพมหานครอยู่ประเทศอะไร?" |
 
-### Benchmark Concurrency
-
-- **20 concurrent** requests พร้อมกัน
-- **10 models** ต่อรอบ
-- **3 คำถามภาษาไทย** ต่อ model
-
-### คุณครูผู้ตรวจ (AI Judge)
+### AI Judge
 
 | ลำดับ | โมเดล | หมายเหตุ |
 |-------|-------|---------|
-| 1 (หลัก) | **DeepSeek Chat** (`deepseek-chat`) | ถูก เสถียร ให้คะแนนแม่น |
-| 2 (สำรอง) | **Qwen3 235B** (OpenRouter free) | ถ้า DeepSeek ไม่ว่าง |
-| 3 (สำรอง) | **Llama 4 Scout** (OpenRouter free) | ถ้าสองตัวแรกไม่ว่าง |
-| 4 (สำรอง) | **Gemma 3 27B** (OpenRouter free) | ถ้าสามตัวแรกไม่ว่าง |
-
-ถ้าคุณครูไม่ว่างทั้ง 4 ตัว จะใช้ Heuristic Score แทน (คำตอบยาว > 10 ตัวอักษร = 5/10)
+| 1 | **DeepSeek Chat** | หลัก (ถูก เสถียร) |
+| 2 | Qwen3 235B | สำรอง (OpenRouter free) |
+| 3 | Llama 4 Scout | สำรอง |
+| 4 | Gemma 3 27B | สำรอง |
 
 ### ชื่อเล่น (Nickname)
 
-คุณครู DeepSeek จะตั้งชื่อเล่นภาษาไทยตลกๆ ให้โมเดล **ตามคะแนนและความประพฤติ**:
+DeepSeek ตั้งชื่อเล่นภาษาไทยตามคะแนน + ความประพฤติ:
 
-**ก่อนสอบ** -- ตั้งชื่อทั่วไปน่ารักๆ (10 ตัว/รอบ):
-- ตัวอย่าง: `ลีลี่ลีล่าลีลา`, `เนโมน้อย`, `ฉิวฉิวฉลาดเฉียบ`
+| คะแนน | พฤติกรรม | ตัวอย่างชื่อ |
+|-------|---------|------------|
+| 90%+ | ขยัน เก่ง เด่นมาก | `ลามะน้อยขยัน` |
+| 70%+ | ตั้งใจเรียน | `น้องเก่งตั้งใจ` |
+| 50%+ | ขี้เกียจนิดหน่อย | `ลูกอ่อนขี้เกียจ` |
+| <30% | ไม่ตั้งใจเรียนเลย | `เด็กดื้อไม่เรียน` |
 
-**หลังสอบ** -- ตั้งชื่อใหม่ตามผลสอบ + ความประพฤติ:
+### กฎ
 
-| คะแนน | ความประพฤติที่บอก DeepSeek | ตัวอย่างชื่อ |
-|-------|-------------------------|------------|
-| 90%+ | "ขยัน เก่ง เด่นมาก" | `ลามะน้อยขยัน`, `ฉลาดน้อยขยัน` |
-| 70%+ | "ตั้งใจเรียน" | `น้องเก่งตั้งใจ` |
-| 50%+ | "ขี้เกียจนิดหน่อย" | `ลูกอ่อนขี้เกียจ` |
-| 30%+ | "ชอบหลับในห้อง" | `หนูน้อยง่วงนอน` |
-| <30% | "ไม่ตั้งใจเรียนเลย" | `เด็กดื้อไม่เรียน` |
-
-- ชื่อไม่ซ้ำกัน -- DeepSeek รู้ชื่อที่ตั้งไปแล้ว
-- ชื่อจะเปลี่ยนหลังสอบทุกครั้ง ตามคะแนนล่าสุด
-
-### เกณฑ์การให้คะแนน
-
-| คะแนน | หมายถึง |
-|-------|--------|
-| 8-10 | ตอบถูกต้อง เป็นธรรมชาติ ภาษาไทยดี |
-| 5-7 | ตอบได้ แต่อาจมีบางจุดไม่สมบูรณ์ |
-| 3-4 | ตอบได้บ้าง แต่คุณภาพต่ำ |
-| 0-2 | ตอบผิด ตอบไม่เป็นภาษาไทย หรือไม่ตอบ |
-
-### กฎการสอบ
-
-- **สอบผ่าน** = คะแนนเฉลี่ย >= 5/10 -- โมเดลพร้อมใช้งาน
-- **สอบตก** = คะแนนเฉลี่ย < 3/10 -- ไม่สอบซ้ำภายใน 7 วัน (ประหยัด token)
-- สอบครบ 3 ข้อแล้ว จะไม่สอบซ้ำอีก
-- สอบสูงสุด 10 โมเดลต่อรอบ (ทุก 1 ชม.)
-- เฉพาะโมเดลที่ผ่าน Health Check แล้วเท่านั้นจึงจะถูกสอบ
+- สอบผ่าน = คะแนนเฉลี่ย >= 5/10
+- สอบตก (< 3/10) จะไม่สอบซ้ำภายใน 7 วัน
+- 20 concurrent, 10 models/รอบ
 
 ---
 
 ## Worker อัตโนมัติ
 
-Worker (โปรแกรมทำงานเบื้องหลัง) ทำงานทุก **1 ชั่วโมง**:
+ทำงานทุก **1 ชั่วโมง** — 4 ขั้นตอน:
 
-### ขั้นตอนที่ 1: สแกนโมเดล (Scan)
-
-- ดึงรายชื่อโมเดลฟรีจาก **8 ผู้ให้บริการพร้อมกัน** (OpenRouter, Kilo, Google, Groq, Cerebras, SambaNova, Mistral, Ollama)
-- บันทึกโมเดลใหม่ อัพเดตโมเดลเดิม
-- ตรวจจับโมเดลที่หายไป (หายชั่วคราว 2-48 ชม. / หายถาวร > 48 ชม.)
-- **ตั้งชื่อเล่นภาษาไทย** ให้โมเดลที่ยังไม่มี (DeepSeek ตั้งให้ 10 ตัว/รอบ)
-
-### ขั้นตอนที่ 2: Health Check (ตรวจสุขภาพ)
-
-- ส่ง ping ทดสอบ **5 concurrent** พร้อมกัน
-- Timeout: Ollama = **120 วินาที** (เพราะ Local LLM โหลดช้า), Cloud = **15 วินาที**
-- โมเดลที่ติด rate limit หรือ error -> พัก cooldown 2 ชม.
-- ทดสอบ tool calling support (สูงสุด 3 ตัว/รอบ)
-- ทดสอบ vision support (สูงสุด 3 ตัว/รอบ)
-
-### ขั้นตอนที่ 3: Benchmark (สอบ)
-
-- สอบ 3 คำถามภาษาไทย ให้คะแนน 0-10
-- **20 concurrent**, **10 models/รอบ**
-- สอบผ่าน = คะแนนเฉลี่ย >= 5/10
-- สอบตก (< 3/10) จะไม่สอบซ้ำภายใน 7 วัน
-
-### ขั้นตอนที่ 4: ตั้งชื่อเล่น (Naming)
-
-- DeepSeek ตั้งชื่อเล่นภาษาไทยให้โมเดลที่ยังไม่มีชื่อ
-- สูงสุด **10 ตัว/รอบ**
-- ชื่อตามคะแนน benchmark + ความประพฤติ
-
-### Log Rotation
-
-- ลบ log เก่าเกิน **30 วัน** อัตโนมัติทุกรอบ
+| ขั้นตอน | ทำอะไร |
+|---------|--------|
+| 1. Scan | สแกน 8 providers พร้อมกัน, บันทึกโมเดลใหม่, ตั้งชื่อเล่น 10 ตัว/รอบ |
+| 2. Health Check | Ping 5 concurrent, Ollama timeout 120s, Cloud 15s, ทดสอบ tool+vision |
+| 3. Benchmark | สอบ 3 คำถาม, 20 concurrent, 10 models/รอบ, ตั้งชื่อตามคะแนน |
+| 4. Cleanup | ลบ log เก่าเกิน 30 วัน |
 
 ---
 
 ## Dashboard
 
-เปิด **http://localhost:3333** เพื่อดู Dashboard
-
-### ส่วนต่างๆ ของ Dashboard
+เปิด **http://localhost:3333**
 
 | ส่วน | คำอธิบาย |
 |------|---------|
-| **Worker Status** | สถานะ worker + นับถอยหลังครั้งถัดไป |
-| **Judge Info** | แสดงว่าใช้ DeepSeek Chat เป็นคุณครูตรวจ |
-| **Cost Comparison** | การ์ดเปรียบเทียบค่าใช้จ่าย 5 paid providers vs BCProxyAI ฟรี (USD + THB) |
-| **สถิติ (Stats Cards)** | 4 animated counters: โมเดลทั้งหมด / พร้อมใช้ / พักผ่อน / มีคะแนน |
-| **การเปลี่ยนแปลง** | แจ้งเตือนโมเดลใหม่ (new) / หายไป (missing) / คำเตือน (warning) |
-| **อันดับโมเดล** | ตาราง ranking ตามคะแนน benchmark |
-| **Speed Race** | Animation แข่งความเร็วระหว่าง providers + podium 1st/2nd/3rd |
-| **ห้องเรียน AI** | Grid แสดงทุกโมเดล ธีมห้องเรียน: เกรด A+ ถึง F, ชื่อเล่นไทย, ความเร็ว |
-| **ทดลองแชท** | Chat panel ทดสอบแชทกับโมเดลที่เลือกได้ |
-| **Gateway Log LIVE** | LIVE log ทุก request เข้า-ออก (refresh ทุก 2 วินาที) |
-| **บันทึกการทำงาน** | Log การทำงานของ worker |
-| **คู่มือ (Guide)** | Modal 5 แท็บ + ปุ่ม GitHub |
-
-Dashboard รีเฟรชอัตโนมัติทุก 15 วินาที (Gateway Log ทุก 2 วินาที)
-
-### Speed Race Animation
-
-- Provider แข่งกัน: Groq vs SambaNova vs Cerebras vs Mistral vs OpenRouter vs Kilo vs Google vs Ollama
-- เรียงตาม latency จริง
-- Podium 1st / 2nd / 3rd
-- อัพเดตอัตโนมัติทุก 15 วินาที
-
-### ห้องเรียน AI (School Theme)
-
-โมเดลแต่ละตัวแสดงผลแบบ "นักเรียน" พร้อม:
-- **ชื่อเล่นภาษาไทย** สีทอง (DeepSeek ตั้งให้)
-- **เกรด**: A+ (97%+) นักเรียนดีเด่น, A (80%+) เก่งมาก, B (60%+) ดี, C (40%+) พอใช้, D (20%+) ต้องปรับปรุง, F ไม่ผ่าน
-- **สถานะตลก**: หัวหน้าห้อง!, ไปพักผ่อนก่อน, รอเข้าห้องสอบ, ซ้ำชั้นเลย
-- **ความเร็ว**: สายฟ้า, เร็วมาก, ปกติ, ช้า, ช้ามาก
+| Worker Status | สถานะ + นับถอยหลัง |
+| Judge Info | DeepSeek Chat เป็นคุณครูตรวจ |
+| Cost Comparison | เปรียบเทียบ 5 paid providers (USD + THB) |
+| Stats Cards | 4 animated counters |
+| Speed Race | Animation แข่งความเร็วระหว่าง providers + podium |
+| ห้องเรียน AI | Grid ทุกโมเดล: เกรด A+-F, ชื่อเล่น, ความเร็ว |
+| Charts & Analytics | กราฟ 4 ประเภท |
+| ทดลองแชท | Chat panel เลือกโมเดลได้ |
+| Gateway Log LIVE | LIVE log ทุก request (refresh 2 วินาที) |
+| คู่มือ | Modal 5 แท็บ |
 
 ---
 
-## ขีดจำกัดของระบบ (Stress Test)
-
-ทดสอบจริงด้วย `stress-test.js`:
+## Stress Test
 
 | สถานการณ์ | Concurrent | Requests | Success Rate | Throughput |
 |-----------|-----------|----------|-------------|------------|
-| **ใช้งานปกติ** | 5 | 200 | **97%** | 2.9 req/s |
-| **ทีมขนาดกลาง** | 10 | 1,000 | **97%** | 3.4 req/s |
-| **โหลดหนัก** | 1,000 | 10,000 | 18-30% | 73-125 req/s |
+| ใช้งานปกติ | 5 | 200 | **97%** | 2.9 req/s |
+| ทีมขนาดกลาง | 10 | 1,000 | **97%** | 3.4 req/s |
+| โหลดหนัก | 1,000 | 10,000 | 18-30% | 73-125 req/s |
 
-> **Bottleneck คือ rate limit ของ provider ฟรี** ไม่ใช่ตัว BCProxyAI  
-> สำหรับ **ทีม 5-20 คนใช้พร้อมกัน** ใช้งานได้สบาย success rate 97%+  
-> ถ้าต้องการรองรับมากกว่านี้ ต้องใช้ paid API หรือเพิ่ม API Key (Auto Rotation)
-
-### รัน Stress Test เอง
+> Bottleneck คือ rate limit ของ provider ฟรี ไม่ใช่ BCProxyAI
+> ทีม 5-20 คน ใช้สบาย 97%+
 
 ```bash
-node stress-test.js
+node stress-test.js    # แก้ TOTAL_REQUESTS / CONCURRENCY ในไฟล์ได้
 ```
-
-แก้ค่า `TOTAL_REQUESTS` และ `CONCURRENCY` ใน `stress-test.js` ได้
 
 ---
 
-## การแก้ไขปัญหาทั่วไป
+## แก้ไขปัญหา
 
-### Docker Desktop ไม่ยอมเริ่ม
-
-- ตรวจสอบว่า Virtualization เปิดอยู่ใน BIOS
-- ลอง restart เครื่อง
-- ตรวจสอบว่า Windows Update ล่าสุดแล้ว
-- ลอง Uninstall แล้ว Install ใหม่
+### Docker Desktop ไม่เริ่ม
+- ตรวจ Virtualization ใน BIOS
+- Restart เครื่อง
 
 ### Worker ไม่ทำงาน
-
 ```bash
-# ดู log ของ container (ดูว่ามี error อะไร)
-docker logs bcproxyai-bcproxyai-1
-
-# สั่ง worker รันทันที
-curl -X POST http://localhost:3333/api/worker
+docker logs bcproxyai-bcproxyai-1    # ดู error
+curl -X POST http://localhost:3333/api/worker    # สั่งรันทันที
 ```
 
 ### ไม่มีโมเดลพร้อมใช้
-
-- ตรวจสอบว่าใส่ API Key ใน `.env.local` แล้ว
-- รอ worker ทำ health check เสร็จ (ดูจาก Dashboard)
-- โมเดลที่ติด rate limit จะพักอัตโนมัติ 2 ชม.
+- ใส่ API Key ใน `.env.local` แล้วหรือยัง?
+- รอ worker scan + health check เสร็จ
 
 ### Gateway ตอบ error
-
 ```bash
-# ทดสอบ gateway (ถ้าตอบกลับมา = ทำงานปกติ)
-curl -X POST http://localhost:3333/v1/chat/completions \
+curl http://localhost:3333/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","messages":[{"role":"user","content":"test"}]}'
 ```
+- ดู header `X-BCProxy-Model` ว่าเลือกโมเดลอะไร
+- ทุกตัว cooldown → ระบบจะสุ่มเลือกแทน (ไม่ 503 ถาวร)
 
-- ตรวจสอบ `X-BCProxy-Model` header เพื่อดูว่าเลือกโมเดลอะไร
-- ถ้าไม่มีโมเดลพร้อมใช้ จะตอบ 503
-- แต่ถ้าทุกตัว cooldown ระบบจะ **สุ่มเลือก** แทน (ไม่ 503 ถาวร)
+### OpenClaw เชื่อมไม่ได้
+- ดูหัวข้อ [เชื่อมต่อกับ OpenClaw](#เชื่อมต่อกับ-openclaw)
+- Docker: ใช้ `host.docker.internal:3333` + approve pairing + bind `"lan"`
+- ทดสอบ: `curl http://localhost:3333/v1/models`
 
-### OpenClaw เชื่อมต่อไม่ได้
+### Ollama เชื่อมไม่ได้
+- Ollama รันอยู่? `ollama list`
+- Pull model แล้ว? `ollama pull gemma3:4b`
+- Docker: ใช้ `OLLAMA_BASE_URL=http://host.docker.internal:11434`
 
-- ดูหัวข้อ [เชื่อมต่อกับ OpenClaw](#เชื่อมต่อกับ-openclaw-ละเอียดมาก) ด้านบน
-- ตรวจสอบใน openclaw.json ว่า `models.providers.*.api` เป็น `"openai-completions"`
-- ตรวจสอบ `models.providers.*.models[0].contextWindow` เป็น `131072`
-- ถ้า Docker: ตรวจ pairing (`openclaw devices list` แล้ว `approve`)
-- ถ้า Docker: ตรวจ gateway bind เป็น `"lan"` + allowedOrigins
-- ทดสอบ: `curl http://localhost:3333/v1/models` ต้องตอบรายชื่อโมเดลกลับมา
-
-### Error 413 (Payload Too Large)
-
-- BCProxyAI จัดการอัตโนมัติ: cooldown โมเดลนั้น 15 นาที แล้ว fallback ไปตัวอื่น
-- ตรวจสอบว่า `contextWindow` ใน openclaw.json = `131072`
-
-### Ollama เชื่อมต่อไม่ได้
-
-- ตรวจสอบว่า Ollama รันอยู่: `ollama list`
-- ตรวจสอบว่า pull model แล้ว: `ollama pull gemma3:4b`
-- ตรวจสอบว่า `OLLAMA_BASE_URL` ถูกต้องใน `.env.local`
-- ถ้ารัน BCProxyAI บน Docker: ใช้ `http://host.docker.internal:11434` แทน `localhost`
-
-### ต้องการ reset ข้อมูลทั้งหมด (เริ่มใหม่)
+### Reset ข้อมูลทั้งหมด
 
 ```bash
-docker compose down                              # หยุด container
-docker volume rm bcproxyai_bcproxyai-data         # ลบ database
-docker compose up -d                              # เริ่มใหม่
+docker compose down
+docker volume rm bcproxyai_bcproxyai-data
+docker compose up -d
 ```
 
 ---
 
-## ค่าใช้จ่ายในการรัน
+## ค่าใช้จ่าย
 
 ### ฟรี 100%
 
-| รายการ | ใช้ตรงไหน | ค่าใช้จ่าย |
-|--------|----------|-----------|
-| OpenRouter, Kilo, Google, Groq | scan + proxy | ฟรี (free tier) |
-| Cerebras, SambaNova, Mistral | scan + proxy | ฟรี (free tier) |
-| Ollama (Local LLM) | scan + proxy | ฟรี (รันบนเครื่องตัวเอง) |
-| Docker Desktop + SQLite | รันระบบ + เก็บข้อมูล | ฟรี |
+| รายการ | ค่าใช้จ่าย |
+|--------|-----------|
+| 8 AI Providers (cloud + local) | ฟรี (free tier) |
+| Docker Desktop + SQLite | ฟรี |
 
 ### DeepSeek (ถ้าใส่ key)
 
-| รายการ | ความถี่ | ค่าใช้จ่ายโดยประมาณ |
-|--------|---------|-------------------|
-| ตรวจข้อสอบ (judge) | 9 calls/ชม. x 24 = 216 calls/วัน | ~$0.22/วัน (~8 บาท) |
-| ตั้งชื่อเล่น (model ใหม่) | 10 ชื่อ/รอบ (เฉพาะวันแรก) | ~$0.12 ครั้งเดียว |
-| ตั้งชื่อหลังสอบ | 3 ชื่อ/รอบ | ~$0.04/วัน (~1 บาท) |
-| **รวม** | | **~$0.05-0.26/วัน (~2-9 บาท)** |
+| รายการ | ค่าใช้จ่าย |
+|--------|-----------|
+| ตรวจข้อสอบ + ตั้งชื่อ | ~$0.05-0.26/วัน (~2-9 บาท) |
 
-> **หลังสแกนครบทุกตัวแล้ว:** ค่าใช้จ่ายลดเหลือ ~$0.05/วัน (~2 บาท) เพราะตั้งชื่อเฉพาะ model ใหม่เท่านั้น
-
-### ถ้าไม่อยากเสียเงินเลย
-
-ลบ `DEEPSEEK_API_KEY` ออกจาก `.env.local` -> ระบบจะ:
-- ใช้ **OpenRouter ฟรี** ตรวจข้อสอบแทน (Qwen3/Llama4/Gemma3)
-- **ไม่ตั้งชื่อเล่น** (แสดงชื่อจริงแทน)
-- **ค่าใช้จ่าย = $0 ทั้งหมด**
+> ไม่อยากเสียเงิน? ลบ `DEEPSEEK_API_KEY` → ใช้ OpenRouter ฟรีตรวจแทน, ไม่ตั้งชื่อเล่น
 
 ---
 
-## สร้างด้วยอะไร?
+## สร้างด้วย
 
-โปรเจคนี้สร้างด้วย **Claude Code (Claude CLI)** -- AI Coding Assistant จาก Anthropic  
-สั่งงานเป็นภาษาไทย สร้างเสร็จภายในวันเดียว ตั้งแต่ออกแบบจนถึง deploy
-
-| เครื่องมือ | ทำหน้าที่ |
-|-----------|----------|
-| **Claude Code (Opus 4.6)** | เขียนโค้ดทั้งหมด ออกแบบระบบ เขียน tests |
-| **Next.js 16 + TypeScript** | Web framework + ภาษาหลัก |
-| **SQLite (better-sqlite3)** | ฐานข้อมูลแบบ embedded (ฝังในตัว) |
-| **Tailwind CSS** | CSS framework สำหรับ UI |
+| เครื่องมือ | หน้าที่ |
+|-----------|--------|
+| **Claude Code (Opus 4.6)** | เขียนโค้ด + ออกแบบระบบ |
+| **Next.js 16 + TypeScript** | Web framework |
+| **SQLite (better-sqlite3)** | Database |
+| **Tailwind CSS** | UI styling |
 | **Docker** | Multi-stage build (289MB) |
-| **Vitest** | Unit testing (67 tests) |
+| **Vitest** | Unit testing |
 
 ---
 
-**BCProxyAI** -- Smart AI Gateway สำหรับ OpenClaw และ HiClaw  
-สร้างด้วย Claude Code (Opus 4.6) + Next.js 16 + TypeScript + SQLite + Tailwind CSS  
-**8 Providers** | **130+ โมเดลฟรี** | **Local LLM (Ollama)** | **Auto-Fallback 10 ครั้ง** | **Speed Race** | **Thai Benchmark** | **Fun Nicknames** | **Health Monitoring** | **Cost Calculator**
+**BCProxyAI** — Smart AI Gateway
+**8 Providers** | **130+ Free Models** | **OpenAI-compatible API** | **Local LLM** | **Auto-Fallback** | **Consensus** | **Thai Benchmark** | **Fun Nicknames**

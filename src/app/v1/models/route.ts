@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/schema";
+import { openAIError, toOpenAIModelObject, unixNow } from "@/lib/openai-compat";
 
 export const dynamic = "force-dynamic";
 
@@ -21,41 +22,11 @@ interface ModelRow {
 
 // Virtual bcproxy/* models shown at top
 const VIRTUAL_MODELS = [
-  {
-    id: "bcproxy/auto",
-    object: "model",
-    created: Math.floor(Date.now() / 1000),
-    owned_by: "bcproxy",
-    description: "Best available model (highest benchmark score)",
-  },
-  {
-    id: "bcproxy/fast",
-    object: "model",
-    created: Math.floor(Date.now() / 1000),
-    owned_by: "bcproxy",
-    description: "Fastest model (lowest latency)",
-  },
-  {
-    id: "bcproxy/tools",
-    object: "model",
-    created: Math.floor(Date.now() / 1000),
-    owned_by: "bcproxy",
-    description: "Best model that supports tool calling",
-  },
-  {
-    id: "bcproxy/thai",
-    object: "model",
-    created: Math.floor(Date.now() / 1000),
-    owned_by: "bcproxy",
-    description: "Best model for Thai language",
-  },
-  {
-    id: "bcproxy/consensus",
-    object: "model",
-    created: Math.floor(Date.now() / 1000),
-    owned_by: "bcproxy",
-    description: "Send to 3 models, pick best answer",
-  },
+  toOpenAIModelObject("bcproxy/auto", "bcproxy"),
+  toOpenAIModelObject("bcproxy/fast", "bcproxy"),
+  toOpenAIModelObject("bcproxy/tools", "bcproxy"),
+  toOpenAIModelObject("bcproxy/thai", "bcproxy"),
+  toOpenAIModelObject("bcproxy/consensus", "bcproxy"),
 ];
 
 export async function GET(_req: NextRequest) {
@@ -99,37 +70,16 @@ export async function GET(_req: NextRequest) {
       )
       .all() as ModelRow[];
 
-    const now = new Date().toISOString();
-
     const realModels = rows.map((row) => {
-      // Determine actual health status
-      let healthStatus = row.health_status || "unknown";
-      if (
-        healthStatus === "rate_limited" &&
-        row.cooldown_until &&
-        row.cooldown_until < now
-      ) {
-        healthStatus = "available"; // cooldown expired
-      }
+      const created = row.first_seen
+        ? Math.floor(new Date(row.first_seen).getTime() / 1000)
+        : unixNow();
 
-      return {
-        id: `${row.provider}/${row.model_id}`,
-        object: "model",
-        created: row.first_seen
-          ? Math.floor(new Date(row.first_seen).getTime() / 1000)
-          : Math.floor(Date.now() / 1000),
-        owned_by: row.provider,
-        // Extended fields (BCProxy-specific)
-        name: row.name,
-        context_length: row.context_length,
-        tier: row.tier,
-        supports_tools: row.supports_tools === 1,
-        supports_vision: row.supports_vision === 1,
-        benchmark_score: row.avg_score ? Number(row.avg_score.toFixed(2)) : null,
-        avg_latency_ms: row.avg_latency ? Math.round(row.avg_latency) : null,
-        health_status: healthStatus,
-        cooldown_until: row.cooldown_until || null,
-      };
+      return toOpenAIModelObject(
+        `${row.provider}/${row.model_id}`,
+        row.provider,
+        created
+      );
     });
 
     return NextResponse.json({
@@ -138,10 +88,7 @@ export async function GET(_req: NextRequest) {
     });
   } catch (err) {
     console.error("[v1/models] Error:", err);
-    return NextResponse.json(
-      { error: { message: String(err), type: "server_error", code: 500 } },
-      { status: 500 }
-    );
+    return openAIError(500, { message: String(err) });
   }
 }
 
