@@ -27,6 +27,7 @@
 - [ตั้งค่า API Keys](#ตั้งค่า-api-keys)
 - [เชื่อมต่อกับ OpenClaw (ละเอียดมาก)](#เชื่อมต่อกับ-openclaw-ละเอียดมาก)
 - [Virtual Models (โมเดลพิเศษ)](#virtual-models-โมเดลพิเศษ)
+- [OpenAI API Compliance](#openai-api-compliance)
 - [ฟีเจอร์เด่น](#ฟีเจอร์เด่น)
 - [API Endpoints](#api-endpoints)
 - [Monitoring & Health Check](#monitoring--health-check)
@@ -496,6 +497,109 @@ ollama/gemma4:31b
 
 ---
 
+## OpenAI API Compliance
+
+BCProxyAI เป็น **100% OpenAI-compatible API** — ใช้งานแทน OpenAI ได้เลย ไม่ต้องแก้โค้ด
+
+### Response Format (ตรงตาม spec ทุก field)
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "groq/llama-4-scout",
+  "system_fingerprint": "fp_bcproxy_a1b2c3d4",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "สวัสดีครับ!",
+      "refusal": null
+    },
+    "finish_reason": "stop",
+    "logprobs": null
+  }],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 20,
+    "total_tokens": 30
+  }
+}
+```
+
+### Error Format (มาตรฐาน OpenAI)
+
+```json
+{
+  "error": {
+    "message": "The model 'xxx' does not exist",
+    "type": "invalid_request_error",
+    "param": "model",
+    "code": "model_not_found"
+  }
+}
+```
+
+| HTTP Status | type | code |
+|-------------|------|------|
+| 400 | `invalid_request_error` | `invalid_request` |
+| 401 | `invalid_request_error` | `invalid_api_key` |
+| 404 | `invalid_request_error` | `model_not_found` |
+| 429 | `rate_limit_exceeded` | `rate_limit_exceeded` |
+| 500 | `api_error` | `server_error` |
+| 503 | `api_error` | `server_overloaded` |
+
+### Model Object (ตรงตาม spec 4 fields)
+
+```json
+{
+  "id": "groq/llama-4-scout",
+  "object": "model",
+  "created": 1700000000,
+  "owned_by": "groq"
+}
+```
+
+### Endpoints ที่รองรับ
+
+| Method | Path | มาตรฐาน |
+|--------|------|---------|
+| POST | `/v1/chat/completions` | OpenAI Chat Completions API |
+| GET | `/v1/models` | OpenAI List Models API |
+| GET | `/v1/models/{model_id}` | OpenAI Retrieve Model API |
+
+### ใช้งานกับ Library/Tool อะไรก็ได้
+
+```python
+# Python (openai library)
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:3333/v1", api_key="dummy")
+response = client.chat.completions.create(
+    model="auto",
+    messages=[{"role": "user", "content": "สวัสดีครับ"}]
+)
+
+# TypeScript (openai library)
+import OpenAI from 'openai';
+const client = new OpenAI({ baseURL: 'http://localhost:3333/v1', apiKey: 'dummy' });
+const response = await client.chat.completions.create({
+    model: 'auto',
+    messages: [{ role: 'user', content: 'สวัสดีครับ' }]
+});
+```
+
+```bash
+# curl
+curl http://localhost:3333/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}'
+```
+
+> **หมายเหตุ:** `api_key` ใส่อะไรก็ได้ (ระบบไม่ตรวจ auth) แต่ต้องใส่เพราะ library บังคับ
+
+---
+
 ## ฟีเจอร์เด่น
 
 ### Weighted Load Balancing
@@ -583,23 +687,53 @@ curl http://localhost:3333/api/cost-savings
 | API status/models/leaderboard | 5 วินาที | ลด DB hit จาก dashboard refresh |
 | Health check | 5 วินาที | ไม่ query DB ซ้ำถี่เกินไป |
 
+### Multi-Model Consensus
+
+ส่งคำถามไป 3 model จาก 3 provider พร้อมกัน เลือกคำตอบที่ดีที่สุด:
+
+```bash
+curl http://localhost:3333/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"bcproxy/consensus","messages":[{"role":"user","content":"อะไรดี?"}]}'
+```
+
+- เลือก model จากคนละ provider (กระจายความเสี่ยง)
+- ตัดสิน: คำตอบยาวที่สุด + เร็วที่สุด = ชนะ
+- Response header `X-BCProxy-Consensus` แสดงผู้เข้าแข่งทั้ง 3
+
+### Prompt Compression
+
+ข้อความยาวเกิน 30K tokens จะถูกบีบอัดอัตโนมัติ:
+- ตัดช่องว่างซ้ำ, ลด URL ยาว, ย่อ code block
+- ประหยัด token ได้ 20-40% โดยไม่เสียเนื้อหา
+- ทำงานอัตโนมัติก่อนส่งไป provider
+
+### Charts & Analytics
+
+Dashboard แสดงกราฟ 4 ประเภท:
+- สถิติรายผู้ให้บริการ (requests, success rate)
+- ปริมาณ request รายชั่วโมง
+- Top 10 models ที่ถูกใช้งาน
+- Token usage รายวัน
+
 ### Input Validation
 
 Gateway ตรวจสอบ request ก่อนประมวลผล:
 - `messages` ต้องเป็น array ที่ไม่ว่าง
 - `model` ต้องเป็น string (ถ้าระบุ)
-- ตอบ 400 พร้อมข้อความอธิบายถ้าผิด format
+- Error ตอบเป็น OpenAI standard format: `{ error: { message, type, param, code } }`
 
 ---
 
 ## API Endpoints
 
-### Gateway (OpenAI Compatible)
+### Gateway (OpenAI Compatible — 100% Standard)
 
 | Method | Path | คำอธิบาย |
 |--------|------|---------|
 | POST | `/v1/chat/completions` | ส่งข้อความแชท (รองรับ stream) |
-| GET | `/v1/models` | รายชื่อโมเดลทั้งหมด + สถานะ |
+| GET | `/v1/models` | รายชื่อโมเดลทั้งหมด |
+| GET | `/v1/models/{model_id}` | ดูข้อมูลโมเดลเฉพาะตัว |
 
 **ตัวอย่าง: ส่งข้อความ**
 

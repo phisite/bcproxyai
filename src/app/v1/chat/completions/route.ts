@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getDb } from "@/lib/db/schema";
 import { getNextApiKey, markKeyCooldown } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
-import { getCached, setCache, clearCache } from "@/lib/cache";
+import { clearCache } from "@/lib/cache";
 import { compressMessages } from "@/lib/prompt-compress";
+import { openAIError, ensureChatCompletionFields } from "@/lib/openai-compat";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -390,16 +391,10 @@ export async function POST(req: NextRequest) {
 
     // Validate request body
     if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
-      return NextResponse.json(
-        { error: { message: "messages is required and must be a non-empty array", type: "invalid_request_error" } },
-        { status: 400 }
-      );
+      return openAIError(400, { message: "messages is required and must be a non-empty array", param: "messages" });
     }
     if (typeof body.model !== "string" && body.model !== undefined) {
-      return NextResponse.json(
-        { error: { message: "model must be a string", type: "invalid_request_error" } },
-        { status: 400 }
-      );
+      return openAIError(400, { message: "model must be a string", param: "model" });
     }
 
     const modelField = (body.model as string) || "auto";
@@ -409,16 +404,10 @@ export async function POST(req: NextRequest) {
     // Budget check — block at 95%
     const budget = checkBudget();
     if (!budget.ok) {
-      return NextResponse.json(
-        {
-          error: {
-            message: `Daily budget exceeded (${budget.percentUsed.toFixed(1)}% used). ลองใหม่พรุ่งนี้หรือเพิ่ม limit ผ่าน /api/budget`,
-            type: "rate_limit_error",
-            code: 429,
-          },
-        },
-        { status: 429 }
-      );
+      return openAIError(429, {
+        message: `Daily budget exceeded (${budget.percentUsed.toFixed(1)}% used). Try again tomorrow or increase limit via /api/budget`,
+        code: "rate_limit_exceeded",
+      });
     }
 
     const parsed = parseModelField(modelField);
@@ -523,10 +512,7 @@ export async function POST(req: NextRequest) {
 
       if (!response.ok && isRetryableStatus(response.status)) {
         const errText = await response.text();
-        return NextResponse.json(
-          { error: { message: errText, type: "provider_error", code: response.status } },
-          { status: response.status }
-        );
+        return openAIError(response.status, { message: errText || `Provider ${provider} returned ${response.status}` });
       }
 
       return buildProxiedResponse(response, provider!, modelId!, isStream, estInputTokens);
@@ -542,25 +528,13 @@ export async function POST(req: NextRequest) {
         | undefined;
 
       if (!row) {
-        return NextResponse.json(
-          {
-            error: {
-              message: `Model not found: ${parsed.modelId}`,
-              type: "invalid_request_error",
-              code: 404,
-            },
-          },
-          { status: 404 }
-        );
+        return openAIError(404, { message: `The model '${parsed.modelId}' does not exist`, param: "model" });
       }
 
       const response = await forwardToProvider(row.provider, row.model_id, body, isStream);
       if (!response.ok && isRetryableStatus(response.status)) {
         const errText = await response.text();
-        return NextResponse.json(
-          { error: { message: errText, type: "provider_error", code: response.status } },
-          { status: response.status }
-        );
+        return openAIError(response.status, { message: errText || `Provider ${row.provider} returned ${response.status}` });
       }
       return buildProxiedResponse(response, row.provider, row.model_id, isStream, estInputTokens);
     }
@@ -578,16 +552,7 @@ export async function POST(req: NextRequest) {
       finalCandidates = getAllModelsIncludingCooldown(caps);
     }
     if (finalCandidates.length === 0) {
-      return NextResponse.json(
-        {
-          error: {
-            message: "ไม่มีโมเดลในระบบเลย — รอ Worker สแกนก่อน กดปุ่ม 'รันตอนนี้' บน Dashboard",
-            type: "server_error",
-            code: 503,
-          },
-        },
-        { status: 503 }
-      );
+      return openAIError(503, { message: "No models available. Worker scan has not completed yet." });
     }
 
     const MAX_RETRIES = 10; // try up to 10 models across different providers
@@ -679,28 +644,12 @@ export async function POST(req: NextRequest) {
     // All retries exhausted
     const latency = Date.now() - startTime;
     logGateway(modelField, null, null, 503, latency, 0, 0, lastError.slice(0, 300), userMsg, null);
-    return NextResponse.json(
-      {
-        error: {
-          message: `ลองแล้ว ${Math.min(MAX_RETRIES, spreadCandidates.length)} โมเดล (${triedProviders.size} providers) ไม่สำเร็จ: ${lastError}`,
-          type: "server_error",
-          code: 503,
-        },
-      },
-      { status: 503 }
-    );
+    return openAIError(503, {
+      message: `All ${Math.min(MAX_RETRIES, spreadCandidates.length)} models from ${triedProviders.size} providers failed: ${lastError}`,
+    });
   } catch (err) {
     console.error("[Gateway] Unexpected error:", err);
-    return NextResponse.json(
-      {
-        error: {
-          message: String(err),
-          type: "server_error",
-          code: 500,
-        },
-      },
-      { status: 500 }
-    );
+    return openAIError(500, { message: String(err) });
   }
 }
 
@@ -782,8 +731,11 @@ async function buildProxiedResponse(
       }
     }
 
+    // Ensure all OpenAI-standard fields exist (id, object, created, system_fingerprint, usage)
+    ensureChatCompletionFields(json, provider, modelId);
+
     // Track token usage
-    const usage = json.usage;
+    const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
     if (usage) {
       trackTokenUsage(provider, modelId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
     } else {
