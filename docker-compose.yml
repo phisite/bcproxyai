@@ -3,8 +3,8 @@ services:
   bcproxyai:
     image: bcproxyai
     build: .
-    ports:
-      - "3334:3000"
+    expose:
+      - "3000"
     env_file:
       - .env.local
     environment:
@@ -17,6 +17,16 @@ services:
         condition: service_healthy
     volumes:
       - bcproxyai-data:/app/data
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "3334:80"
+    volumes:
+      - ./caddy-docker.Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - bcproxyai
+    restart: unless-stopped
 
   postgres:
     image: postgres:17-alpine
