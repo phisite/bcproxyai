@@ -31,7 +31,7 @@ function migrate() {
   
   console.log("Existing tables:", Array.from(existingTables).join(", "));
 
-  // Tables to add
+  // Tables to add (with correct schema)
   const migrations = [
     {
       name: "complaints",
@@ -39,13 +39,14 @@ function migrate() {
         CREATE TABLE IF NOT EXISTS complaints (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           model_id TEXT NOT NULL,
-          provider TEXT,
-          error_code TEXT,
-          error_message TEXT,
-          severity TEXT DEFAULT 'low',
+          category TEXT NOT NULL,
+          reason TEXT,
+          user_message TEXT,
+          assistant_message TEXT,
+          source TEXT DEFAULT 'api',
           status TEXT DEFAULT 'pending',
           created_at TEXT DEFAULT (datetime('now')),
-          resolved_at TEXT
+          FOREIGN KEY (model_id) REFERENCES models(id)
         );
         CREATE INDEX IF NOT EXISTS idx_complaints_model ON complaints(model_id);
         CREATE INDEX IF NOT EXISTS idx_complaints_created ON complaints(created_at);
@@ -119,6 +120,31 @@ function migrate() {
     }
   ];
 
+  // Column additions for existing tables
+  const columnAdditions = [
+    {
+      table: "benchmark_results",
+      columns: [
+        { name: "category", type: "TEXT" }
+      ]
+    },
+    {
+      table: "models",
+      columns: [
+        { name: "description", type: "TEXT" },
+        { name: "supports_tools", type: "INTEGER DEFAULT -1" },
+        { name: "supports_vision", type: "INTEGER DEFAULT -1" },
+        { name: "nickname", type: "TEXT" }
+      ]
+    },
+    {
+      table: "health_logs",
+      columns: [
+        { name: "cooldown_until", type: "TEXT" }
+      ]
+    }
+  ];
+
   for (const migration of migrations) {
     if (existingTables.has(migration.name)) {
       console.log(`✓ ${migration.name} already exists, skipping`);
@@ -128,6 +154,30 @@ function migrate() {
     console.log(`Adding ${migration.name}...`);
     db.exec(migration.sql);
     console.log(`✓ ${migration.name} added`);
+  }
+
+  // Add missing columns to existing tables
+  console.log("\nChecking for missing columns...");
+  for (const addition of columnAdditions) {
+    if (!existingTables.has(addition.table)) {
+      console.log(`  ${addition.table} table doesn't exist, skipping columns`);
+      continue;
+    }
+    
+    // Get existing columns for this table
+    const columns = db.prepare(`PRAGMA table_info(${addition.table})`).all() as { name: string }[];
+    const existingColumns = new Set(columns.map(c => c.name));
+    
+    for (const col of addition.columns) {
+      if (existingColumns.has(col.name)) {
+        console.log(`  ${addition.table}.${col.name} already exists, skipping`);
+        continue;
+      }
+      
+      console.log(`  Adding ${addition.table}.${col.name}...`);
+      db.exec(`ALTER TABLE ${addition.table} ADD COLUMN ${col.name} ${col.type}`);
+      console.log(`  ✓ ${addition.table}.${col.name} added`);
+    }
   }
 
   const newTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
