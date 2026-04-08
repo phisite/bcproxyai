@@ -51,7 +51,18 @@ function migrate() {
         CREATE INDEX IF NOT EXISTS idx_complaints_model ON complaints(model_id);
         CREATE INDEX IF NOT EXISTS idx_complaints_created ON complaints(created_at);
         CREATE INDEX IF NOT EXISTS idx_complaints_status ON complaints(status);
-      `
+      `,
+      migrateOld: true,
+      oldSchema: {
+        model_id: "model_id",
+        category: "",  // New column, no mapping
+        reason: "",    // New column, no mapping
+        user_message: "",  // New column, no mapping
+        assistant_message: "",  // New column, no mapping
+        source: "source",  // May exist in old schema
+        status: "status",
+        created_at: "created_at"
+      }
     },
     {
       name: "complaint_exams",
@@ -147,6 +158,39 @@ function migrate() {
 
   for (const migration of migrations) {
     if (existingTables.has(migration.name)) {
+      // Check if table needs migration (has old schema)
+      const columns = db.prepare(`PRAGMA table_info(${migration.name})`).all() as { name: string }[];
+      const existingColumns = new Set(columns.map(c => c.name));
+      
+      // Check if this table needs schema migration
+      if (migration.migrateOld) {
+        // Check if it has the wrong schema (has 'error_message' but not 'category')
+        if (existingColumns.has('error_message') && !existingColumns.has('category')) {
+          console.log(`⚠ ${migration.name} has old schema, migrating...`);
+          
+          // Rename old table
+          db.exec(`ALTER TABLE ${migration.name} RENAME TO ${migration.name}_old`);
+          
+          // Create new table
+          db.exec(migration.sql);
+          
+          // Copy data (map old columns to new)
+          const oldColumns = db.prepare(`PRAGMA table_info(${migration.name}_old)`).all() as { name: string }[];
+          const oldColsSet = new Set(oldColumns.map(c => c.name));
+          
+          // Build insert that copies compatible columns
+          const compatibleCols = ['model_id', 'status', 'created_at'].filter(col => oldColsSet.has(col));
+          if (compatibleCols.length > 0) {
+            db.exec(`INSERT INTO ${migration.name} (${compatibleCols.join(',')}) SELECT ${compatibleCols.join(',')} FROM ${migration.name}_old`);
+          }
+          
+          // Drop old table
+          db.exec(`DROP TABLE ${migration.name}_old`);
+          console.log(`✓ ${migration.name} migrated to new schema`);
+          continue;
+        }
+      }
+      
       console.log(`✓ ${migration.name} already exists, skipping`);
       continue;
     }
