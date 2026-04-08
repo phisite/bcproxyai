@@ -38,11 +38,33 @@ export async function recordRoutingResult(
 ): Promise<void> {
   try {
     const sql = getSqlClient();
+    // Insert the raw event row
     await sql`
       INSERT INTO routing_stats (model_id, provider, prompt_category, success, latency_ms)
       VALUES (${modelId}, ${provider}, ${promptCategory}, ${success ? 1 : 0}, ${latencyMs})
     `;
   } catch { /* non-critical */ }
+}
+
+/**
+ * Get real production avg latency for a model from routing_stats (last 24h, min 3 samples)
+ * Returns null if not enough data.
+ */
+export async function getRealAvgLatency(modelId: string): Promise<number | null> {
+  try {
+    const sql = getSqlClient();
+    const rows = await sql<{ avg_lat: number | null; cnt: number }[]>`
+      SELECT AVG(latency_ms)::float AS avg_lat, COUNT(*)::int AS cnt
+      FROM routing_stats
+      WHERE model_id = ${modelId}
+        AND created_at >= now() - interval '24 hours'
+    `;
+    const row = rows[0];
+    if (!row || row.cnt < 3 || row.avg_lat == null) return null;
+    return row.avg_lat;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -7,7 +7,7 @@ import { compressMessages } from "@/lib/prompt-compress";
 import { openAIError, ensureChatCompletionFields } from "@/lib/openai-compat";
 import { autoDetectComplaint } from "@/lib/auto-complaint";
 import { getReputationScore } from "@/lib/worker/complaint";
-import { detectPromptCategory, recordRoutingResult, getBestModelsForCategory, getBestModelsByBenchmarkCategory, emitEvent } from "@/lib/routing-learn";
+import { detectPromptCategory, recordRoutingResult, getBestModelsForCategory, getBestModelsByBenchmarkCategory, emitEvent, getRealAvgLatency } from "@/lib/routing-learn";
 import { getRedis } from "@/lib/redis";
 import { checkRateLimit } from "@/lib/rate-limit";
 
@@ -131,9 +131,54 @@ async function recordProviderFailureMem(provider: string): Promise<void> {
 
 async function recordProviderSuccessMem(provider: string): Promise<void> {
   try {
-    await getRedis().del(`fs:provider:${provider}`);
+    const redis = getRedis();
+    await redis.del(`fs:provider:${provider}`);
+    // Circuit breaker: record success in rolling window
+    const succKey = `cb:succ:${provider}`;
+    const cur = await redis.get(succKey);
+    const newVal = (Number(cur ?? 0) + 1).toString();
+    await redis.set(succKey, newVal, "EX", 30);
   } catch { /* ignore */ }
   _memFailures.delete(provider);
+}
+
+// P1-3: Circuit breaker — check if provider circuit is open
+async function isCircuitOpen(provider: string): Promise<boolean> {
+  try {
+    const redis = getRedis();
+    const cbKey = `cb:open:${provider}`;
+    const val = await redis.get(cbKey);
+    if (val === null) return false;
+    if (val === "half-open") return false; // allow probe
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// P1-3: Record provider failure for circuit breaker rolling window
+async function recordCircuitFailure(provider: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    const failKey = `cb:fail:${provider}`;
+    const succKey = `cb:succ:${provider}`;
+    const cur = await redis.get(failKey);
+    const newVal = (Number(cur ?? 0) + 1).toString();
+    await redis.set(failKey, newVal, "EX", 30);
+
+    const fails = Number(newVal);
+    const succs = Number((await redis.get(succKey)) ?? 0);
+    const total = fails + succs;
+    if (total >= 5) {
+      const successRate = succs / total;
+      if (successRate < 0.3) {
+        // Open circuit for 2 minutes
+        const cbKey = `cb:open:${provider}`;
+        await redis.set(cbKey, "open", "EX", 120);
+        console.log(`[CIRCUIT-OPEN] ${provider} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 2min`);
+      }
+    }
+  } catch { /* ignore */ }
 }
 
 interface RequestCapabilities {
@@ -181,15 +226,15 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
     ? "CASE WHEN m.supports_tools = 1 THEN 0 ELSE 1 END ASC, CASE WHEN m.context_length >= 128000 THEN 0 WHEN m.context_length >= 32000 THEN 1 ELSE 2 END ASC,"
     : "";
 
-  // Use raw SQL for this complex query
+  // Use raw SQL for this complex query — includes real production latency from routing_stats
   const rows = await sql.unsafe(`
     SELECT
       m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
       ${benchmarkCategory
         ? `COALESCE(bcat.avg_score, ball.avg_score_all, 0) as avg_score,
-           COALESCE(bcat.avg_latency, ball.avg_latency_all, 9999999) as avg_latency`
+           COALESCE(rs.avg_lat_real, bcat.avg_latency, ball.avg_latency_all, 9999999) as avg_latency`
         : `COALESCE(ball.avg_score_all, 0) as avg_score,
-           COALESCE(ball.avg_latency_all, 9999999) as avg_latency`
+           COALESCE(rs.avg_lat_real, ball.avg_latency_all, 9999999) as avg_latency`
       },
       h.status as health_status,
       h.cooldown_until
@@ -208,6 +253,13 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
       FROM benchmark_results GROUP BY model_id
     ) ball ON m.id = ball.model_id
     LEFT JOIN (
+      SELECT model_id, AVG(latency_ms)::float AS avg_lat_real
+      FROM routing_stats
+      WHERE created_at >= now() - interval '24 hours'
+      GROUP BY model_id
+      HAVING COUNT(*) >= 3
+    ) rs ON m.id = rs.model_id
+    LEFT JOIN (
       SELECT hl.model_id, hl.status, hl.cooldown_until
       FROM health_logs hl
       INNER JOIN (
@@ -224,18 +276,25 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
       CASE WHEN ${benchmarkCategory ? "COALESCE(bcat.avg_score, ball.avg_score_all, 0)" : "COALESCE(ball.avg_score_all, 0)"} > 0 THEN 0 ELSE 1 END ASC,
       ${benchmarkCategory ? "COALESCE(bcat.avg_score, ball.avg_score_all, 0)" : "COALESCE(ball.avg_score_all, 0)"} DESC,
       m.context_length DESC,
-      ${benchmarkCategory ? "COALESCE(bcat.avg_latency, ball.avg_latency_all, 9999999)" : "COALESCE(ball.avg_latency_all, 9999999)"} ASC
+      COALESCE(rs.avg_lat_real, ${benchmarkCategory ? "COALESCE(bcat.avg_latency, ball.avg_latency_all, 9999999)" : "COALESCE(ball.avg_latency_all, 9999999)"}) ASC
   `) as ModelRow[];
 
-  const providerCount: Record<string, number> = {};
-  for (const r of rows) providerCount[r.provider] = (providerCount[r.provider] || 0) + 1;
-  console.log(`[DEBUG] mode=auto candidates=${rows.length} providers=${JSON.stringify(providerCount)}`);
-  if (rows.length > 0) {
-    const top3 = rows.slice(0, 3).map(r => `${r.provider}/${r.model_id}`);
-    console.log(`[DEBUG] after boost: candidates=${rows.length} top3=[${top3}]`);
+  // Apply Ollama slowness penalty: push Ollama to end if any cloud provider is available
+  const cloudRows = rows.filter(r => r.provider !== "ollama");
+  const ollamaRows = rows.filter(r => r.provider === "ollama");
+  const reorderedRows = cloudRows.length > 0 ? [...cloudRows, ...ollamaRows] : rows;
+
+  if (process.env.LOG_LEVEL === "debug") {
+    const providerCount: Record<string, number> = {};
+    for (const r of reorderedRows) providerCount[r.provider] = (providerCount[r.provider] || 0) + 1;
+    console.log(`[DEBUG] mode=auto candidates=${reorderedRows.length} providers=${JSON.stringify(providerCount)}`);
+    if (reorderedRows.length > 0) {
+      const top3 = reorderedRows.slice(0, 3).map(r => `${r.provider}/${r.model_id}(${r.avg_latency}ms)`);
+      console.log(`[DEBUG] after boost: candidates=${reorderedRows.length} top3=[${top3}]`);
+    }
   }
 
-  return rows;
+  return reorderedRows;
 }
 
 async function logGateway(
@@ -359,11 +418,11 @@ async function selectModelsByMode(
 
   if (mode === "fast") {
     const visionFilter = caps.hasImages ? "AND m.supports_vision = 1" : "";
-    return await sql.unsafe(`
+    const fastRows = await sql.unsafe(`
       SELECT
         m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
         COALESCE(b.avg_score, 0) as avg_score,
-        COALESCE(b.avg_latency, 9999999) as avg_latency,
+        COALESCE(rs.avg_lat_real, b.avg_latency, 9999999) as avg_latency,
         h.status as health_status,
         h.cooldown_until
       FROM models m
@@ -371,6 +430,13 @@ async function selectModelsByMode(
         SELECT model_id, AVG(score) as avg_score, AVG(latency_ms) as avg_latency
         FROM benchmark_results GROUP BY model_id
       ) b ON m.id = b.model_id
+      LEFT JOIN (
+        SELECT model_id, AVG(latency_ms)::float AS avg_lat_real
+        FROM routing_stats
+        WHERE created_at >= now() - interval '24 hours'
+        GROUP BY model_id
+        HAVING COUNT(*) >= 3
+      ) rs ON m.id = rs.model_id
       LEFT JOIN (
         SELECT hl.model_id, hl.status, hl.cooldown_until
         FROM health_logs hl
@@ -383,8 +449,12 @@ async function selectModelsByMode(
         AND COALESCE(m.supports_audio_output, 0) != 1
         AND COALESCE(m.supports_image_gen, 0) != 1
         ${visionFilter}
-      ORDER BY avg_latency ASC, avg_score DESC
+      ORDER BY
+        CASE WHEN m.provider = 'ollama' THEN 1 ELSE 0 END ASC,
+        COALESCE(rs.avg_lat_real, b.avg_latency, 9999999) ASC,
+        avg_score DESC
     `) as ModelRow[];
+    return fastRows;
   }
 
   if (mode === "tools") {
@@ -544,7 +614,8 @@ async function forwardToProvider(
     requestBody.options = { ...(requestBody.options as Record<string, unknown> ?? {}), num_ctx: 65536 };
   }
 
-  const timeoutMs = provider === "ollama" ? 60000 : 15000;
+  // P0-2: 12s per-attempt timeout for cloud providers, 30s for Ollama (local model load time)
+  const timeoutMs = provider === "ollama" ? 30_000 : 12_000;
   const response = await fetch(url, {
     method: "POST",
     headers,
@@ -582,10 +653,12 @@ function cleanResponseContent(content: string): string {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
-    const debugKeys = Object.keys(body);
-    const toolCount = Array.isArray(body.tools) ? (body.tools as unknown[]).length : 0;
-    const msgCount = Array.isArray(body.messages) ? (body.messages as unknown[]).length : 0;
-    console.log(`[DEBUG] keys=[${debugKeys}] msgs=${msgCount} tools=${toolCount} stream=${body.stream}`);
+    if (process.env.LOG_LEVEL === "debug") {
+      const debugKeys = Object.keys(body);
+      const toolCount = Array.isArray(body.tools) ? (body.tools as unknown[]).length : 0;
+      const msgCount = Array.isArray(body.messages) ? (body.messages as unknown[]).length : 0;
+      console.log(`[DEBUG] keys=[${debugKeys}] msgs=${msgCount} tools=${toolCount} stream=${body.stream}`);
+    }
 
     if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
       return openAIError(400, { message: "messages is required and must be a non-empty array", param: "messages" });
@@ -740,9 +813,11 @@ export async function POST(req: NextRequest) {
     // ---- Smart routing: auto / fast / tools / thai ----
     const benchmarkCategory = caps.hasImages ? "vision" : promptCategory;
     const candidates = await selectModelsByMode(parsed.mode, caps, benchmarkCategory);
-    const candByProv: Record<string, number> = {};
-    candidates.forEach(c => candByProv[c.provider] = (candByProv[c.provider] || 0) + 1);
-    console.log(`[DEBUG] mode=${parsed.mode} candidates=${candidates.length} providers=${JSON.stringify(candByProv)}`);
+    if (process.env.LOG_LEVEL === "debug") {
+      const candByProv: Record<string, number> = {};
+      candidates.forEach(c => candByProv[c.provider] = (candByProv[c.provider] || 0) + 1);
+      console.log(`[DEBUG] mode=${parsed.mode} candidates=${candidates.length} providers=${JSON.stringify(candByProv)}`);
+    }
 
     if (!caps.hasTools) {
       const benchmarkBest = await getBestModelsByBenchmarkCategory(benchmarkCategory);
@@ -761,7 +836,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    console.log(`[DEBUG] after boost: candidates=${candidates.length} top3=[${candidates.slice(0,3).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
+    if (process.env.LOG_LEVEL === "debug") {
+      console.log(`[DEBUG] after boost: candidates=${candidates.length} top3=[${candidates.slice(0,3).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
+    }
 
     let finalCandidates = candidates;
     if (finalCandidates.length === 0) {
@@ -786,7 +863,7 @@ export async function POST(req: NextRequest) {
     const activeCandidates = finalCandidates.filter((_, i) => !cooldownChecks[i]);
     if (activeCandidates.length > 0) {
       finalCandidates = activeCandidates;
-      console.log(`[DEBUG] after provider-cooldown filter: ${finalCandidates.length} candidates`);
+      if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after provider-cooldown filter: ${finalCandidates.length} candidates`);
     }
 
     // Weighted Load Balancing
@@ -828,7 +905,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    console.log(`[DEBUG] spread=${spreadCandidates.length} top5=[${spreadCandidates.slice(0,5).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
+    if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] spread=${spreadCandidates.length} top5=[${spreadCandidates.slice(0,5).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
 
     const TOTAL_TIMEOUT_MS = 30_000;
 
@@ -841,6 +918,7 @@ export async function POST(req: NextRequest) {
       const { provider, model_id: actualModelId, id: dbModelId } = candidate;
       if (blockedProviders.has(provider)) continue;
       if (await isProviderCooledDownMem(provider)) continue;
+      if (await isCircuitOpen(provider)) { console.log(`[CIRCUIT-SKIP] ${provider} circuit open`); continue; }
       tried++;
       triedProviders.add(provider);
 
@@ -850,8 +928,8 @@ export async function POST(req: NextRequest) {
         if (response.ok) {
           const latency = Date.now() - startTime;
           await recordProviderSuccessMem(provider);
-          const SLOW_THRESHOLD_MS = 30_000;
-          const SLOW_COOLDOWN_MINUTES = 15;
+          const SLOW_THRESHOLD_MS = 10_000;
+          const SLOW_COOLDOWN_MINUTES = 10;
           if (latency > SLOW_THRESHOLD_MS && provider !== "ollama") {
             await logCooldown(dbModelId, `Slow response: ${(latency / 1000).toFixed(1)}s > ${SLOW_THRESHOLD_MS / 1000}s threshold`, 0, SLOW_COOLDOWN_MINUTES);
             await emitEvent("provider_error", `${provider}/${actualModelId} ช้ามาก (${(latency / 1000).toFixed(1)}s)`, `ตอบช้าเกิน ${SLOW_THRESHOLD_MS / 1000}s → cooldown ${SLOW_COOLDOWN_MINUTES} นาที`, provider, actualModelId, "warn");
@@ -923,6 +1001,7 @@ export async function POST(req: NextRequest) {
         lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
         await recordRoutingResult(dbModelId, provider, promptCategory, false, Date.now() - startTime);
         await recordProviderFailureMem(provider);
+        await recordCircuitFailure(provider);
         const st = response.status;
         console.log(`[RETRY] ${tried}/${MAX_RETRIES} | ${provider}/${actualModelId} → HTTP ${st} | ${errText.slice(0, 200)}`);
         if (provider !== "ollama" && (st === 400 || st === 402 || st === 429 || st === 413 || st === 422 || st === 410 || st === 404 || st >= 500 || st === 401 || st === 403)) {
@@ -942,11 +1021,19 @@ export async function POST(req: NextRequest) {
         }
         continue;
       } catch (err) {
-        lastError = `${provider}/${actualModelId}: ${String(err)}`;
-        await logCooldown(dbModelId, lastError);
+        const errStr = String(err);
+        const isTimeout = errStr.includes("TimeoutError") || errStr.includes("timeout") || errStr.includes("AbortError");
+        lastError = `${provider}/${actualModelId}: ${errStr}`;
+        if (isTimeout) {
+          console.log(`[TIMEOUT-ATTEMPT] ${provider}/${actualModelId} exceeded per-attempt timeout — applying 5min cooldown`);
+          await logCooldown(dbModelId, `attempt timeout: ${errStr.slice(0, 100)}`, 0, 5);
+        } else {
+          await logCooldown(dbModelId, lastError);
+        }
         await recordRoutingResult(dbModelId, provider, promptCategory, false, Date.now() - startTime);
         await recordProviderFailureMem(provider);
-        await emitEvent("provider_error", `${provider} เชื่อมต่อไม่ได้`, String(err).slice(0, 200), provider, actualModelId, "warn");
+        await recordCircuitFailure(provider);
+        await emitEvent("provider_error", `${provider} เชื่อมต่อไม่ได้`, errStr.slice(0, 200), provider, actualModelId, "warn");
         continue;
       }
     }

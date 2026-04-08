@@ -55,3 +55,6 @@ next-env.d.ts
 loadtest/results/
 loadtest/*.json
 loadtest/summary.html
+
+# performance reports
+perf-report.md

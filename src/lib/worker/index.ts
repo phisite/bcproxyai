@@ -60,9 +60,9 @@ async function logWorker(step: string, message: string, level = "info"): Promise
 async function cleanOldLogs(): Promise<void> {
   try {
     const sql = getSqlClient();
-    const workerResult = await sql`DELETE FROM worker_logs WHERE created_at < now() - interval '30 days'`;
-    const healthResult = await sql`DELETE FROM health_logs WHERE checked_at < now() - interval '30 days'`;
-    const gatewayResult = await sql`DELETE FROM gateway_logs WHERE created_at < now() - interval '30 days'`;
+    const workerResult = await sql`DELETE FROM worker_logs WHERE created_at < now() - interval '3 days'`;
+    const healthResult = await sql`DELETE FROM health_logs WHERE checked_at < now() - interval '3 days'`;
+    const gatewayResult = await sql`DELETE FROM gateway_logs WHERE created_at < now() - interval '7 days'`;
     await logWorker(
       "cleanup",
       `🧹 ลบ log เก่า: worker ${workerResult.count}, health ${healthResult.count}, gateway ${gatewayResult.count} แถว`
