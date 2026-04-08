@@ -30,11 +30,14 @@ COPY --from=builder /app/node_modules/prebuild-install ./node_modules/prebuild-i
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
-# Copy scripts for runtime migration
+# Copy scripts for runtime migration (from builder where they exist)
 COPY --from=builder /app/scripts ./scripts
 
-# Set executable permission for entrypoint
-RUN chmod +x /app/docker-entrypoint.sh 2>/dev/null || true
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+
+# Make entrypoint executable
+RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 3000
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
