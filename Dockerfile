@@ -30,5 +30,9 @@ COPY --from=builder /app/node_modules/prebuild-install ./node_modules/prebuild-i
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
+# Copy and run database migration script
+COPY --from=builder /app/scripts ./scripts
+RUN if [ -f ./scripts/migrate.ts ]; then npx tsx scripts/migrate.ts; fi
+
 EXPOSE 3000
 CMD ["node", "server.js"]
