@@ -18,9 +18,9 @@ const DB_PATH = path.join(process.cwd(), "data", "bcproxyai.db");
 
 function migrate() {
   if (!fs.existsSync(DB_PATH)) {
-    console.error(`Database not found at ${DB_PATH}`);
-    console.log("Run 'npm run dev' first to create the database.");
-    process.exit(1);
+    console.log(`Database not found at ${DB_PATH} - will be created on first run.`);
+    console.log("Run migration manually after first run: npx tsx scripts/migrate.ts");
+    return; // Don't exit with error - DB will be created automatically
   }
 
   const db = new Database(DB_PATH);
