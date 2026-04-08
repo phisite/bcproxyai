@@ -10,6 +10,7 @@ import { getReputationScore } from "@/lib/worker/complaint";
 import { detectPromptCategory, recordRoutingResult, getBestModelsForCategory, getBestModelsByBenchmarkCategory, emitEvent, getRealAvgLatency } from "@/lib/routing-learn";
 import { getRedis } from "@/lib/redis";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getCachedResponse, setCachedResponse } from "@/lib/response-cache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -784,6 +785,31 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Improvement C: response cache check (non-stream, low-temperature, no tools)
+    const cachedHit = await getCachedResponse(body);
+    if (cachedHit) {
+      console.log(`[CACHE-HIT] ${cachedHit.provider}/${cachedHit.model}`);
+      const cacheHeaders = new Headers();
+      cacheHeaders.set("Content-Type", "application/json");
+      cacheHeaders.set("X-BCProxy-Provider", cachedHit.provider);
+      cacheHeaders.set("X-BCProxy-Model", cachedHit.model);
+      cacheHeaders.set("X-BCProxy-Cache", "HIT");
+      cacheHeaders.set("Access-Control-Allow-Origin", "*");
+      const cacheBody = {
+        id: `chatcmpl-cache-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: cachedHit.model,
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: cachedHit.content },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      };
+      return new Response(JSON.stringify(cacheBody), { status: 200, headers: cacheHeaders });
+    }
+
     const parsed = parseModelField(modelField);
 
     if (budget.preferCheap && parsed.mode === "auto") {
@@ -1086,6 +1112,10 @@ export async function POST(req: NextRequest) {
               }
 
               await trackTokenUsage(provider, actualModelId, usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0);
+              // Improvement C: store in response cache (non-stream, low-temp, no tools)
+              if (content) {
+                setCachedResponse(body, { content, provider, model: actualModelId }).catch(() => { /* non-critical */ });
+              }
               console.log(`[RES] 200 | ${provider}/${actualModelId} | ${latency}ms | "${_reqMsg}"`);
               return new Response(JSON.stringify(json), { status: 200, headers });
             } catch {
