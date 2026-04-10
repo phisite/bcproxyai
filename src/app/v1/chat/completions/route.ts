@@ -1223,6 +1223,8 @@ export async function POST(req: NextRequest) {
       !caps.hasTools &&
       estTokens <= 20_000 &&
       hedgeCount >= 2;
+    // Only skip hedged candidates when hedge actually runs — otherwise start from 0
+    if (!canHedge) hedgeStartIdx = 0;
     if (canHedge) {
       try {
         const hedgeResult = await hedgeRace(hedgeContenders, body, isStream);
@@ -1365,6 +1367,7 @@ export async function POST(req: NextRequest) {
       if (!(await hasTpmHeadroom(provider, actualModelId, estProjected))) {
         skippedCandidates.push(candidate);
         skipReasons.push(`${provider}/${actualModelId}:tpm-exhausted`);
+        console.log(`[TPM-EXHAUST-SKIP:${_reqId}] ${provider}/${actualModelId} — est ${estProjected} tok`);
         continue;
       }
 
