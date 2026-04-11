@@ -1,26 +1,50 @@
+# Dependencies
 node_modules/
+
+# Build outputs
 .next/
 out/
 build/
-coverage/
-data/
 dist/
-loadtest/
-generated/reports/
-generated/scripts/
+coverage/
+*.tsbuildinfo
+
+# Data & logs
+data/
 *.log
+*.db
+*.sqlite
+
+# Secrets
 *.pem
 .env*
 !.env.example
+
+# Generated / reports
+generated/reports/
+generated/scripts/
 k6-results/
 perf-reports/
+loadtest/
+
+# Binary / media
 *.png
 *.jpg
 *.jpeg
 *.gif
 *.mp4
-*.db
-*.sqlite
+*.min.js
+*.min.css
+*.lock
+
+# IDE & cache
 .cache/
 .turbo/
-*.tsbuildinfo
+.idea/
+.vscode/
+
+# Git
+.git/
+
+# Docker volumes
+exam-images/
